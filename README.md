@@ -1,6 +1,6 @@
 # Sequoia-X V3
 
-> A 股量化选股系统 + 手机端实时监控 | A-Share Quantitative Stock Selection & Mobile Monitoring System
+> 主要面向在职人员在工作期间不方便使用PC端进行炒股的人。A 股量化选股系统（操作数据量大在PC端运行） + 手机端实时监控 | A-Share Quantitative Stock Selection & Mobile Monitoring System
 
 基于 [sngyai/Sequoia-X](https://github.com/sngyai/Sequoia-X) 进行大幅改造和扩展，在此感谢原作者的贡献。
 
