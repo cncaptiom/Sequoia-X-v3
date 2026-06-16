@@ -1,0 +1,50 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 虚拟环境
+venv/
+.venv/
+env/
+ENV/
+
+# IDE 配置
+.idea/
+.vscode/
+.kiro
+
+# 数据库文件
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# 环境变量
+.env
+
+# 输出目录（评级结果、回测报告等）
+output/
+
+# 打包构建
+*.egg-info/
+dist/
+build/
+
+# 测试与工具缓存
+.pytest_cache/
+.ruff_cache/
+
+# 日志
+*.log
+
+# Hypothesis 测试缓存
+.hypothesis/
+
+# 安装的第三方 skill（非项目源码）
+.agents/
+skills-lock.json
+
+# 内部恢复/临时文件
+_recovery_checkpoint.json

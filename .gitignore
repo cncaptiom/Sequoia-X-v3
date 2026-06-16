@@ -46,5 +46,16 @@ build/
 .agents/
 skills-lock.json
 
+# Flutter/Dart 构建文件（手机端）
+**.dart_tool/
+**.flutter-plugins*
+**/build/
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+**/ios/Flutter/.last_build_id
+**/coverage/
+**/doc/api/
+
 # 内部恢复/临时文件
 _recovery_checkpoint.json
