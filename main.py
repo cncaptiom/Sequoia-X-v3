@@ -1,0 +1,1111 @@
+"""Sequoia-X V2 主程序入口。
+
+运行模式：
+  python main.py                          # 日常模式
+  python main.py --backfill               # 回填历史K线
+  python main.py --rating                 # 评级模式：全市场7大策略评分
+  python main.py --install-schedule       # 安装每日21:00定时任务
+  python main.py --remove-schedule        # 卸载定时任务
+  python main.py --backtest               # 回测模式：策略历史绩效评估
+  python main.py --regime                 # 市场状态检测
+  python main.py --factors TOP20          # 多因子选股（取排名前20只）
+  python main.py --parallel-backfill      # 并行回填（8进程，约3分钟）卸载定时任务
+
+日常模式流程：
+  A. 8进程增量补数据 + MaVolume/TurtleTrade 策略选股 + 各自推送
+  B. 计算两策略交集，与前日对比，推送新增/持续信息
+  C. 从交集评分选出最佳5只，逐只技术分析（支撑/压力/买卖策略），推送详细分析
+
+评级模式流程：
+  A. 同步今日数据
+  B. 全市场7大策略评分（MaVolume/TurtleTrade/均值回归/量价关系/ATR通道/MACD+RSI/MA交叉）
+  C. 5档评级分类（强烈买入/买入/观望/关注/回避）
+  D. 飞书推送评级报告
+"""
+import argparse
+import sys
+from datetime import datetime, date, timedelta
+import os
+import subprocess
+
+from dotenv import load_dotenv
+load_dotenv()
+
+import socket
+socket.setdefaulttimeout(10.0)
+
+from sequoia_x.core.config import get_settings
+from sequoia_x.core.logger import get_logger
+from sequoia_x.data.engine import DataEngine
+from sequoia_x.notify.feishu import FeishuNotifier
+from sequoia_x.strategy.base import BaseStrategy
+from sequoia_x.strategy.ma_volume import MaVolumeStrategy
+from sequoia_x.strategy.turtle_trade import TurtleTradeStrategy
+from sequoia_x.strategy.high_tight_flag import HighTightFlagStrategy
+from sequoia_x.strategy.limit_up_shakeout import LimitUpShakeoutStrategy
+from sequoia_x.strategy.uptrend_limit_down import UptrendLimitDownStrategy
+from sequoia_x.strategy.rps_breakout import RpsBreakoutStrategy
+from sequoia_x.regime import RegimeDetector, REGIME_LABELS
+from sequoia_x.utils.name_resolver import NameResolver
+from sequoia_x import cloud
+
+def _check_data_freshness(engine, logger) -> dict:
+    """检查数据库中股票数据的新鲜度，返回报告。"""
+    from sequoia_x.data.engine import DataValidator
+    report = DataValidator.compute_data_health_report(engine.db_path)
+    stale = report.get("stale_symbols", 0)
+    total = report.get("total_symbols", 0)
+    fresh = total - stale
+    logger.info(f"数据新鲜度: {fresh}/{total} 只5日内有更新, {stale} 只数据过期")
+    if stale > total * 0.3 if total > 0 else False:
+        logger.warning(f"超过30%股票数据过期，选股结果可能不准确！建议执行 --backfill 或检查网络")
+    return report
+
+def _upload_priority_watchlist(uploader, engine, regime_result=None):
+    """上传优先监控列表（Serenity 产业链瓶颈标的）到 COS。"""
+    import json, os
+    watchlist_path = "data/priority_watchlist.json"
+    if not os.path.exists(watchlist_path):
+        return False
+    try:
+        with open(watchlist_path, encoding="utf-8") as f:
+            watchlist = json.load(f)
+    except Exception:
+        return False
+
+    from sequoia_x.utils.name_resolver import get_name_resolver
+    resolver = get_name_resolver()
+
+    items = []
+    for item in watchlist:
+        symbol = item["symbol"]
+        df = engine.get_ohlcv(symbol)
+        current_price = float(df["close"].iloc[-1]) if not df.empty else 0
+        pct_chg = 0
+        if len(df) >= 2:
+            pct_chg = round((df["close"].iloc[-1] - df["close"].iloc[-2]) / df["close"].iloc[-2] * 100, 1)
+        items.append({
+            "symbol": symbol,
+            "name": resolver.get_name(symbol),
+            "reason": item.get("reason", ""),
+            "category": item.get("category", ""),
+            "current_price": round(current_price, 2),
+            "pct_chg": pct_chg,
+        })
+
+    data = {
+        "date": __import__("time").strftime("%Y-%m-%d"),
+        "generated_at": __import__("time").strftime("%Y-%m-%d %H:%M:%S"),
+        "market_regime": regime_result.label if regime_result else "",
+        "items": items,
+    }
+    return uploader._put_json("priority/today.json", data)
+
+
+def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, regime_result=None):
+    if not settings.cos_enabled:
+        logger.info("COS not enabled, skip")
+        return False
+    bucket = settings.cos_bucket
+    region = settings.cos_region
+    secret_id = settings.cos_secret_id
+    secret_key = settings.cos_secret_key
+    if not all([bucket, secret_id, secret_key]):
+        logger.warning("COS config incomplete, skip")
+        return False
+    ok = True
+    from sequoia_x.cloud import CosUploader
+    uploader = CosUploader(bucket, region, secret_id, secret_key)
+
+    from sequoia_x.rating.engine import RatingConfig
+    config = RatingConfig()
+    if regime_result:
+        config.apply_regime(regime_result.label)
+
+    # 上传评级策略配置
+    if not uploader.upload_rating_config(config.to_dict()):
+        ok = False
+
+    # 上传市场状态
+    if regime_result:
+        rd = {
+            "label": regime_result.label,
+            "regime": regime_result.regime.value if hasattr(regime_result.regime, 'value') else str(regime_result.regime),
+            "suggested_exposure": regime_result.suggested_exposure,
+            "trend_strength": regime_result.trend_strength,
+            "volatility_regime": regime_result.volatility_regime,
+            "strategy_bias": regime_result.strategy_bias,
+        }
+        if not uploader.upload_market_regime(rd):
+            ok = False
+
+    # 上传全量评级结果（不限量）
+    if rating_results:
+        ratings_dict = [r.to_dict() for r in rating_results]
+        # 用信号数据的买入区间覆盖评级引擎的（SignalGenerator算法更精确）
+        if signals:
+            signal_map = {s.symbol: s for s in signals}
+            for rd in ratings_dict:
+                sig = signal_map.get(rd["symbol"])
+                if sig and sig.entry_zone_low > 0 and sig.entry_zone_high > 0:
+                    rd["buy_range"] = f"{sig.entry_zone_low:.2f} - {sig.entry_zone_high:.2f}"
+                    rd["stop_loss_price"] = sig.stop_loss if sig.stop_loss > 0 else rd.get("stop_loss_price")
+                    rd["take_profit_price"] = sig.take_profit_1 if sig.take_profit_1 > 0 else rd.get("take_profit_price")
+        regime_data = {"label": regime_result.label} if regime_result else {}
+        if not uploader.upload_full_ratings(ratings_dict, config.to_dict(), regime_data):
+            ok = False
+
+        # 上传组合摘要（用信号数据而非原始评级结果，确保与操作建议一致）
+        if signals:
+            top_picks = [{
+                "symbol": s.symbol, "name": s.name,
+                "rating": "strong_buy" if s.confidence >= 0.75 else "buy" if s.confidence >= 0.60 else "watch",
+                "rating_label": "强烈推荐" if s.confidence >= 0.75 else "推荐" if s.confidence >= 0.60 else "关注",
+                "total_score": s.confidence * 10,
+                "current_price": s.current_price,
+            } for s in sorted(signals, key=lambda x: x.confidence, reverse=True)[:10]]
+        elif rating_results:
+            top_picks = [{
+                "symbol": r.symbol, "name": r.name,
+                "rating": r.rating, "rating_label": r.rating_label,
+                "total_score": r.total_score, "current_price": r.current_price,
+            } for r in rating_results[:10]]
+        rs = {}
+        for r in rating_results or []:
+            rs[r.rating] = rs.get(r.rating, 0) + 1
+        if not uploader.upload_portfolio_summary(
+            top_picks, rs,
+            regime_result.label if regime_result else "",
+            regime_result.suggested_exposure if regime_result else 0.0,
+        ):
+            ok = False
+
+        # 上传优先监控列表（Serenity 产业链瓶颈标的）
+        _upload_priority_watchlist(uploader, engine, regime_result)
+        rs = {}
+        for r in rating_results:
+            rs[r.rating] = rs.get(r.rating, 0) + 1
+        if not uploader.upload_portfolio_summary(
+            top_picks, rs,
+            regime_result.label if regime_result else "",
+            regime_result.suggested_exposure if regime_result else 0.0,
+        ):
+            ok = False
+
+    # 上传完整信号数据（手机端操作建议主数据源）
+    if signals:
+        rl = regime_result.label if regime_result else ""
+        exp = regime_result.suggested_exposure if regime_result else 0.0
+        ratings_for_signal = [r.to_dict() for r in rating_results] if rating_results else None
+        if not uploader.upload_signals(signals, ratings_for_signal, rl, exp):
+            ok = False
+
+    logger.info(f"COS sync {'OK' if ok else 'partial fail'}")
+    return ok
+
+
+
+
+def _install_schedule() -> None:
+    """安装 Windows 每日 21:00 定时任务（SYSTEM 账户，息屏/未登录也可运行）。"""
+    python_exe = sys.executable
+    script_path = os.path.abspath(__file__)
+    work_dir = os.path.dirname(script_path)
+
+    cmd = [
+        "schtasks", "/create", "/tn", "Sequoia-X选股",
+        "/tr", f'cmd /c cd /d "{work_dir}" && "{python_exe}" "{script_path}"',
+        "/sc", "daily", "/st", "21:00",
+        "/ru", "SYSTEM",
+        "/f",
+    ]
+    try:
+        subprocess.run(
+            cmd, cwd=work_dir, check=True, capture_output=True, text=True
+        )
+        print("[OK] 定时任务已安装：每日 21:00 自动运行 Sequoia-X 选股")
+        print("[提示] 以 SYSTEM 权限运行，息屏/未登录状态下仍可执行")
+    except subprocess.CalledProcessError as exc:
+        print(f"[ERROR] 安装定时任务失败: {exc.stderr or exc.stdout}")
+        sys.exit(1)
+
+
+def _remove_schedule() -> None:
+    """卸载 Windows 定时任务。"""
+    try:
+        subprocess.run(
+            ["schtasks", "/delete", "/tn", "Sequoia-X选股", "/f"],
+            check=True, capture_output=True, text=True,
+        )
+        print("[OK] 定时任务已卸载")
+    except subprocess.CalledProcessError as exc:
+        print(f"[ERROR] 卸载定时任务失败: {exc.stderr or exc.stdout}")
+        sys.exit(1)
+
+
+def _run_daily(settings, logger, engine, notifier) -> None:
+    """日常模式完整流程。"""
+    # ── 数据新鲜度报告 ──
+    _check_data_freshness(engine, logger)
+
+    # ── A 阶段：同步数据 + 执行策略 ──
+    logger.info("开始拉取最新快照...")
+    if not _is_trading_day():
+        logger.info("今日非交易日，跳过数据同步")
+    else:
+        count = engine.sync_today_bulk()
+        logger.info(f"快照同步完成，写入 {count} 只股票")
+
+    # -- market regime detection --
+    detector = RegimeDetector(engine)
+    regime = detector.detect("000905")
+    logger.info(f"Regime: {regime.label}, exposure: {regime.suggested_exposure:.0%}, trend: {regime.trend_strength:+.2f}")
+
+    regime_warning = ""
+    if regime.suggested_exposure <= 0.30:
+        regime_warning = f"[Bear {regime.label} exposure {regime.suggested_exposure:.0%}] "
+
+    # ── 策略分类（与 regime 模块的策略偏向定义一致） ──
+    STRATEGY_CATEGORIES = {
+        "trend": ["MaVolumeStrategy", "TurtleTradeStrategy"],
+        "momentum": ["RpsBreakoutStrategy", "HighTightFlagStrategy"],
+        "reversal": ["LimitUpShakeoutStrategy", "UptrendLimitDownStrategy"],
+    }
+    # 每类策略中各策略的基础权重（同类中可不等权）
+    CATEGORY_STRATEGY_WEIGHTS = {
+        "trend": {"MaVolumeStrategy": 0.5, "TurtleTradeStrategy": 0.5},
+        "momentum": {"RpsBreakoutStrategy": 0.6, "HighTightFlagStrategy": 0.4},
+        "reversal": {"LimitUpShakeoutStrategy": 0.5, "UptrendLimitDownStrategy": 0.5},
+    }
+
+    # 根据市场状态计算每个策略的最终权重
+    # regime.strategy_bias = {"trend": 0.5, "momentum": 0.3, "reversal": 0.2}
+    strategy_regime_weights: dict[str, float] = {}
+    for category, bias_weight in regime.strategy_bias.items():
+        cat_strats = STRATEGY_CATEGORIES.get(category, [])
+        inner_weights = CATEGORY_STRATEGY_WEIGHTS.get(category, {})
+        for s in cat_strats:
+            inner_w = inner_weights.get(s, 1.0 / max(len(cat_strats), 1))
+            strategy_regime_weights[s] = bias_weight * inner_w
+
+    # 归一化
+    total_regime_w = sum(strategy_regime_weights.values())
+    if total_regime_w > 0:
+        for s in strategy_regime_weights:
+            strategy_regime_weights[s] /= total_regime_w
+
+    logger.info(f"市场状态: {regime.label} | 策略权重: {strategy_regime_weights}")
+
+    all_strategies: list[BaseStrategy] = [
+        MaVolumeStrategy(engine=engine, settings=settings),
+        TurtleTradeStrategy(engine=engine, settings=settings),
+        HighTightFlagStrategy(engine=engine, settings=settings),
+        LimitUpShakeoutStrategy(engine=engine, settings=settings),
+        UptrendLimitDownStrategy(engine=engine, settings=settings),
+        RpsBreakoutStrategy(engine=engine, settings=settings),
+    ]
+
+    strategy_results: dict[str, list[str]] = {}
+
+    for strategy in all_strategies:
+        strategy_name = type(strategy).__name__
+        logger.info(f"执行策略：{strategy_name}")
+        selected: list[str] = strategy.run()
+        logger.info(f"{strategy_name} 选出 {len(selected)} 只股票")
+        strategy_results[strategy_name] = selected
+
+    # ── B 阶段：多策略融合评分（按市场状态加权） ──
+    from sequoia_x.ensemble import ConsensusEngine
+    from sequoia_x.utils.name_resolver import get_name_resolver
+
+    name_resolver = get_name_resolver()
+
+    # 构建 strategy_map: 每只股票被哪些策略选中
+    strategy_map: dict[str, list[str]] = {}
+    for strat_name, stock_list in strategy_results.items():
+        for sym in stock_list:
+            if sym not in strategy_map:
+                strategy_map[sym] = []
+            strategy_map[sym].append(strat_name)
+
+    logger.info(f"全策略选股共 {len(strategy_map)} 只独特股票")
+
+    if not strategy_map:
+        logger.warning("所有策略均无选股结果，跳过后续分析")
+        return
+
+    # 多策略融合评分
+    engine_consensus = ConsensusEngine()
+    consensus_results = engine_consensus.score(strategy_map)
+    top_consensus = ConsensusEngine.get_top_n(consensus_results, n=50, min_strategies=1)
+
+    logger.info(f"多策略融合评分完成: Top5={[r.symbol for r in top_consensus[:5]]}")
+
+    # 记录各策略选股数量
+    strategy_counts = {name: len(stocks) for name, stocks in strategy_results.items()}
+    logger.info(f"策略选股数量: {strategy_counts}")
+
+    # 统计多策略确认股票数
+    multi_strategy = [s for s in consensus_results if s.strategy_count >= 2]
+    logger.info(f"多策略确认(>=2个策略): {len(multi_strategy)} 只")
+
+    # 保存今日融合结果
+    import pandas as pd
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
+    today_str = datetime.now().strftime("%Y%m%d")
+    records = []
+    for cs in top_consensus:
+        name = name_resolver.get_name(cs.symbol)
+        records.append({
+            "symbol": cs.symbol,
+            "name": name,
+            "strategies": ",".join(cs.strategies),
+            "strategy_count": cs.strategy_count,
+            "final_score": cs.final_score,
+            "categories": ",".join(cs.categories_hit),
+        })
+    pd.DataFrame(records).to_csv(f"{output_dir}/Consensus_{today_str}.csv", index=False, encoding="utf-8-sig")
+    logger.info(f"融合结果已保存: {len(records)} 只")
+
+    if multi_strategy:
+        top_multi = consensus_results[:30]
+        logger.info(f"多策略确认: {len(top_multi)} 只（不单独推送，见推荐报告）")
+
+    # ── C 阶段：精选评分与详细分析（直接用 SignalGenerator 做统一排序） ──
+    top5_symbols = [s.symbol for s in top_consensus[:5]]
+    logger.info("=" * 50)
+    logger.info(f"精选 Top 5 详细分析: {top5_symbols}")
+    logger.info("=" * 50)
+
+    if top5_symbols:
+        from sequoia_x.factors import FactorCalculator, CrossSectionalRanker
+
+        # 多因子基本面评分
+        factor_calc = FactorCalculator(engine)
+        factor_results = factor_calc.compute_all(top5_symbols, progress=False)
+        ranked_factors = CrossSectionalRanker.rank_and_combine(factor_results)
+        factor_map = {r.symbol: r for r in ranked_factors}
+        logger.info(f"因子评分完成: {len(ranked_factors)} 只")
+
+        # 逐只技术分析
+        for sym in top5_symbols:
+            df = engine.get_ohlcv(sym)
+            from sequoia_x.analysis.technical import analyze_stock
+            tech = analyze_stock(df)
+            fr = factor_map.get(sym)
+            factor_str = f" [因子:PE={fr.pe:.1f} PB={fr.pb:.1f} ROE={fr.roe:.1f}%]" if fr and fr.pe else ""
+            logger.info(f"  {sym} | 趋势:{tech['trend']} | 买入:{tech['strategy']['buy_zone']} | 止损:{tech['strategy']['stop_loss']}{factor_str}")
+
+        # 获取名称
+        from sequoia_x.utils.name_resolver import get_name_resolver
+        name_resolver = get_name_resolver()
+        stock_names = name_resolver.get_names(top5_symbols)
+        logger.info(f"精选分析完成，详情见推荐报告")
+
+    else:
+        logger.info("无候选股票，跳过精选分析")
+
+
+    # ═══════════════════════════════════════════════
+    # D 阶段：生成结构化交易信号 + 推荐报告
+    # ═══════════════════════════════════════════════
+    logger.info("=" * 50)
+    logger.info("生成交易信号与推荐报告...")
+    logger.info("=" * 50)
+
+    try:
+        from sequoia_x.signal import SignalGenerator
+        from sequoia_x.recommender import ReportGenerator
+        from datetime import datetime as _dt
+
+        # strategy_map 已在 B 阶段构建完成，直接使用
+        # 所有候选股票：用融合评分结果排序
+        # 优先使用已融合评分的 top_consensus
+        consensus_symbols = [cs.symbol for cs in top_consensus] if top_consensus else []
+        # 同时补充未被融合评分覆盖的策略选股
+        all_strategy_symbols = list(strategy_map.keys())
+        # 按融合评分排序，未评分的放后面
+        all_candidates = list(dict.fromkeys(consensus_symbols + all_strategy_symbols))
+        
+
+        # 限制候选数量避免过多
+        all_candidates = all_candidates[:50]
+
+        if all_candidates:
+            # 生成结构化交易信号
+            sig_gen = SignalGenerator(engine, total_capital=1_000_000.0)
+            signals = sig_gen.batch_generate(
+                symbols=all_candidates,
+                strategy_map=strategy_map,
+                market_regime=regime.label,
+            )
+
+            # 构建推荐报告
+            from sequoia_x.signal.models import SignalResult
+            report_result = SignalResult(
+                signals=signals,
+                total_scanned=len(all_candidates),
+                market_regime=regime.label,
+                suggested_total_exposure=regime.suggested_exposure,
+                generated_at=_dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+
+            # 记录推荐到数据库
+            from sequoia_x.tracker import RecommendationTracker
+            tracker = RecommendationTracker(engine.db_path)
+            tracker.record_signals(signals)
+
+            # 终端打印推荐报告
+            report_gen = ReportGenerator(notifier)
+            report_gen.print_console(report_result)
+
+            # 飞书推送 Top 10 推荐
+            report_gen.push_feishu(report_result, webhook_key="ma_volume")
+
+            # 同步到腾讯云COS（供手机端实时监控）
+            _upload_to_cos(settings, logger, engine, signals=signals, regime_result=regime)
+        else:
+            logger.info("无候选股票，跳过信号生成")
+
+    except ImportError as ie:
+        logger.warning(f"信号/推荐模块导入失败: {ie}，跳过信号生成")
+    except Exception as e:
+        logger.warning(f"信号生成异常: {e}")
+
+    _check_data_freshness(engine, logger)
+    logger.info("日常模式运行完成")
+def _is_trading_day() -> bool:
+    """判断今天是否是 A 股交易日。
+
+    1. 先检查是否周末（周六日一定休市）
+    2. 再用 baostock 的交易日历 API 验证（含春节/国庆等节假日判断）
+    3. 如果 baostock 调用失败，fallback 到周末判断（保守模式）
+    """
+    from datetime import datetime
+    today = datetime.now()
+    # 周末一定休市
+    if today.weekday() >= 5:
+        return False
+    try:
+        import baostock as bs
+        bs.login()
+        rs = bs.query_trade_dates(start_date=today.strftime("%Y-%m-%d"),
+                                   end_date=today.strftime("%Y-%m-%d"))
+        is_trading = False
+        while rs.next():
+            row = rs.get_row_data()
+            if row[1] == "1":  # 1=交易日, 0=非交易日
+                is_trading = True
+        bs.logout()
+        return is_trading
+    except Exception:
+        # fallback: 周一至周五认为是交易日（节假日时会有误判，但保守可用）
+        return True
+
+
+def _run_rating(settings, logger, engine, notifier) -> None:
+    """评级模式：全市场扫描 + 评级推送。"""
+    logger.info("=" * 50)
+    logger.info("启动全市场评级模式")
+    logger.info("=" * 50)
+
+    from sequoia_x.rating.engine import RatingEngine
+
+    # 数据新鲜度报告
+    _check_data_freshness(engine, logger)
+
+    # 获取本地所有股票
+    symbols = engine.get_local_symbols()
+    logger.info(f"本地共 {len(symbols)} 只股票")
+
+    if not symbols:
+        logger.warning("无本地数据，请先执行 --backfill")
+        return
+
+    # 非交易日跳过数据同步
+    if not _is_trading_day():
+        logger.info("今日非交易日，跳过数据同步")
+    else:
+        count = engine.sync_today_bulk()
+        logger.info(f"数据同步完成，写入 {count} 条")
+
+    # 批量查股票名称（使用 NameResolver 缓存替代重复 baostock 查询）
+    from sequoia_x.utils.name_resolver import get_name_resolver
+    name_resolver = get_name_resolver()
+    stock_names = name_resolver.get_names(symbols)
+
+    # 市场状态检测
+    detector = RegimeDetector(engine)
+    regime = detector.detect("000905")
+    logger.info(f"Regime: {regime.label}, exposure: {regime.suggested_exposure:.0%}")
+    notifier.send_regime_alert(regime, webhook_key="rating")
+
+    # 创建评级引擎（根据市场状态动态调整策略权重）
+    from sequoia_x.rating.engine import RatingConfig
+    rating_config = RatingConfig()
+    rating_config.apply_regime(regime.label)
+    logger.info(f"策略权重: maVol={rating_config.weight_ma_volume:.2f} turtle={rating_config.weight_turtle_trade:.2f} "
+                f"meanRev={rating_config.weight_mean_reversion:.2f} volPrice={rating_config.weight_volume_price:.2f} "
+                f"atr={rating_config.weight_atr_channel:.2f} macdRsi={rating_config.weight_macd_rsi:.2f} maCross={rating_config.weight_ma_cross:.2f}")
+    rating_engine = RatingEngine(config=rating_config)
+
+    # 全市场扫描
+    all_results = rating_engine.scan_market(
+        symbols=symbols,
+        data_loader=lambda s: engine.get_ohlcv(s),
+        top_n=99999,  # 不限数量，用于后续三类评分排序
+        min_bars=60,
+    )
+    logger.info(f"评级完成，上榜 {len(all_results)} 只")
+
+    # 填充股票名称
+    for r in all_results:
+        if not r.name:
+            r.name = stock_names.get(r.symbol, r.symbol)
+
+    # 统计
+    strong_buy = sum(1 for r in all_results if r.rating == "strong_buy")
+    buy = sum(1 for r in all_results if r.rating == "buy")
+    logger.info(f"强烈买入: {strong_buy}, 买入: {buy}")
+
+    # 评级统计已合并到操作建议卡片中，不再单独推送评级报告
+
+    # 因子交叉验证：对 strong_buy + buy 股票计算多因子得分
+    strong_and_buy = [r for r in all_results if r.rating in ("strong_buy", "buy")]
+    if strong_and_buy:
+        from sequoia_x.factors import FactorCalculator, CrossSectionalRanker
+        buy_symbols = [r.symbol for r in strong_and_buy]
+        logger.info(f"因子交叉验证: 对 {len(buy_symbols)} 只 strong_buy/buy 股票计算基本面...")
+        fc = FactorCalculator(engine)
+        f_results = fc.compute_all(buy_symbols, progress=False)
+        f_ranked = CrossSectionalRanker.rank_and_combine(f_results)
+        f_map = {r.symbol: r for r in f_ranked}
+
+        # 构建因子验证卡片
+        elements = []
+        high_quality = []  # 技术面 + 基本面双优
+        for ar in strong_and_buy:
+            fr = f_map.get(ar.symbol)
+            if not fr or fr.composite_score <= 0:
+                continue
+            name = getattr(ar, "name", "") or stock_names.get(ar.symbol, ar.symbol)
+            fp = fr.factor_percentiles
+            fund_parts = []
+            if fr.pe is not None: fund_parts.append(f"PE:{fr.pe:.1f}")
+            if fr.pb is not None: fund_parts.append(f"PB:{fr.pb:.1f}")
+            if fr.roe is not None: fund_parts.append(f"ROE:{fr.roe:.1f}%")
+            fund_str = " | ".join(fund_parts) if fund_parts else "无基本面数据"
+            elements.append(
+                f"**{name} ({ar.symbol})** 评级:{ar.rating_label} 技术分:{ar.total_score} | "
+                f"因子总分:{fr.composite_score:.3f}\n"
+                f"价值:{fp.get('value',0):.3f} 质量:{fp.get('quality',0):.3f} "
+                f"动量:{fp.get('momentum',0):.3f} 低波:{fp.get('low_vol',0):.3f} 规模:{fp.get('size',0):.3f}\n"
+                f"{fund_str}"
+            )
+            # 双优判定：技术分 >= 4 且因子总分 >= 0.5
+            if ar.total_score >= 4 and fr.composite_score >= 0.5:
+                high_quality.append(f"{name}({ar.symbol})")
+
+        if elements:
+            import json, requests
+            header_note = ""
+            if high_quality:
+                header_note = f"\n**\u2b50 技术面+基本面双优：** {' / '.join(high_quality[:10])}\n"
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {
+                        "title": {
+                            "tag": "plain_text",
+                            "content": f"\U0001f4ca 因子交叉验证 | strong_buy/buy | {today_str}",
+                        },
+                        "template": "blue",
+                    },
+                    "elements": [
+                        {"tag": "div", "text": {"tag": "lark_md", "content": f"**验证范围：** strong_buy + buy 共 {len(buy_symbols)} 只{header_note}"}},
+                        {"tag": "hr"},
+                    ] + [
+                        {"tag": "div", "text": {"tag": "lark_md", "content": e}}
+                        for e in elements[:20]
+                    ],
+                },
+            }
+            try:
+                url = settings.get_webhook_url("rating")
+                resp = requests.post(
+                    url, data=json.dumps(payload),
+                    headers={"Content-Type": "application/json"}, timeout=10,
+                )
+                if resp.status_code == 200 and resp.json().get("code") == 0:
+                    logger.info(f"因子交叉验证推送成功: {len(elements)} 只, 双优: {len(high_quality)}")
+                else:
+                    logger.error(f"因子交叉验证推送失败: {resp.text}")
+            except Exception as exc:
+                logger.error(f"因子交叉验证推送异常: {exc}")
+
+    # 导出 JSON 到 output/（供 gpfxAPP 导入）
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
+    today_str = datetime.now().strftime("%Y%m%d")
+    export = []
+    for r in all_results:
+        export.append({
+            "code": r.symbol,
+            "name": getattr(r, "name", "") or stock_names.get(r.symbol, r.symbol),
+            "rating": r.rating,
+            "rating_label": r.rating_label,
+            "total_score": r.total_score,
+            "strategy_scores": r.strategy_scores,
+            "category_scores": r.category_scores,
+            "current_price": r.current_price,
+            "stop_loss": r.stop_loss_price,
+            "take_profit": r.take_profit_price,
+            "risk_reward_ratio": r.risk_reward_ratio,
+            "buy_range": r.buy_range,
+        })
+    import json
+    json_path = f"{output_dir}/rating_result_{today_str}.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(export, f, ensure_ascii=False, indent=2)
+    logger.info(f"评级结果已导出: {json_path} ({len(export)} 只)")
+
+    # ── 综合推荐报告：按总分排序取前15名，全部推送操作建议 ──
+    # 不再只筛选 strong_buy/buy，所有有评分的股票按总分排名展示
+    # 这样用户可以看到从"强烈买入"到"关注"的完整梯队
+    candidates = all_results[:15]  # 按评级+总分排序后的前15名
+
+    if candidates:
+        # 构建 strategy_map: {symbol: [positive_score_strategies]}
+        strategy_map = {}
+        strategy_key_map = {
+            "maVolume": "MaVolumeStrategy", "turtleTrade": "TurtleTradeStrategy",
+            "meanReversion": "MeanReversionStrategy", "volumePrice": "VolumePriceStrategy",
+            "atrChannel": "AtrChannelStrategy", "macdRsi": "MacdRsiStrategy",
+            "maCross": "MaCrossStrategy",
+        }
+        for r in candidates:
+            trigger_strats = []
+            for sk, sv in r.strategy_scores.items():
+                if sv > 0:
+                    trigger_strats.append(strategy_key_map.get(sk, sk))
+            if not trigger_strats:
+                trigger_strats = ["RatingEngine"]
+            strategy_map[r.symbol] = trigger_strats
+
+        # 使用 SignalGenerator 生成完整TradeSignal（优先方案）
+        from sequoia_x.signal.generator import SignalGenerator
+        from sequoia_x.recommender.reporter import ReportGenerator
+        from sequoia_x.signal.models import SignalResult, TradeSignal
+
+        gen = SignalGenerator(engine)
+        signals = gen.batch_generate(
+            symbols=[r.symbol for r in candidates],
+            strategy_map=strategy_map,
+            market_regime=regime.label,
+        )
+
+        # 如果SignalGenerator返回空（数据过期/不足），从AnalysisResult直接构建
+        if not signals:
+            logger.info("SignalGenerator返回空，直接从AnalysisResult构建TradeSignal")
+            signals = []
+            for r in candidates:
+                entry_low = entry_high = 0.0
+                if r.buy_range:
+                    try:
+                        parts = r.buy_range.replace(" ", "").split("-")
+                        if len(parts) == 2:
+                            entry_low = float(parts[0])
+                            entry_high = float(parts[1])
+                    except (ValueError, IndexError):
+                        pass
+                if entry_low <= 0 or entry_high <= 0:
+                    entry_low = r.current_price * 0.97
+                    entry_high = r.current_price * 1.01
+                stop_loss = r.stop_loss_price or round(entry_low * 0.95, 2)
+                tp1 = r.take_profit_price or round(entry_high * 1.08, 2)
+                tp2 = round(entry_high * 1.15, 2)
+                pos_pct = 0.08 if r.rating == "strong_buy" else 0.05
+                strat_cnt = sum(1 for v in r.strategy_scores.values() if v > 0)
+                conf_score = 0.0
+                # 综合评分.docx 规则：
+                # 1. 多策略确认（满分0.25）
+                if strat_cnt >= 3: conf_score += 0.25
+                elif strat_cnt == 2: conf_score += 0.15
+                else: conf_score += 0.10
+                # 2. 趋势走好（满分0.20）
+                if r.trend_passed: conf_score += 0.20
+                # 3. 成交量活跃（满分0.15）
+                active_strat_ratio = strat_cnt / max(len(r.strategy_scores), 1)
+                if active_strat_ratio >= 0.5: conf_score += 0.15
+                elif active_strat_ratio >= 0.3: conf_score += 0.08
+                # 4. 接近支撑位（满分0.15）
+                if r.stop_loss_price and r.current_price > 0:
+                    proximity = 1.0 - abs(r.current_price - r.stop_loss_price) / (r.current_price * 0.15)
+                    if proximity > 0.7: conf_score += 0.15
+                    elif proximity > 0.4: conf_score += 0.08
+                # 5. 低波动环境（满分0.10）
+                if r.total_score > 0: conf_score += 0.05
+                # 6. 量价共振加分（满分0.10）
+                if r.trend_passed and active_strat_ratio >= 0.5:
+                    conf_score += 0.10
+                # 截断到1.0
+                confidence = round(max(min(conf_score, 1.0), 0.05), 3)
+                sname = r.name or stock_names.get(r.symbol, r.symbol)
+                sig = TradeSignal(
+                    symbol=r.symbol, name=sname,
+                    strategies=list(r.strategy_scores.keys()) if r.strategy_scores else ["rating"],
+                    current_price=r.current_price,
+                    entry_zone_low=round(entry_low, 2),
+                    entry_zone_high=round(entry_high, 2),
+                    entry_condition=f"现价{r.current_price:.2f}，买入区间{entry_low:.2f}~{entry_high:.2f}",
+                    stop_loss=round(stop_loss, 2),
+                    take_profit_1=round(tp1, 2),
+                    take_profit_2=round(tp2, 2),
+                    suggested_position_pct=pos_pct,
+                    confidence=confidence,
+                    score_details=r.strategy_scores or {},
+                    market_regime=regime.label,
+                    rationale=f"评级{r.rating_label}，总分{r.total_score:.1f}，{sname}进入买入区间",
+                )
+                signals.append(sig)
+
+        # 按置信度降序排列，确保最高优先级的在前面
+        signals.sort(key=lambda s: s.confidence, reverse=True)
+
+        # 评级分布统计
+        rating_dist = {"strong_buy": 0, "buy": 0, "watch": 0, "attention": 0, "avoid": 0}
+        for r in all_results:
+            rating_dist[r.rating] = rating_dist.get(r.rating, 0) + 1
+
+        # 推送推荐报告（合并评级统计信息）
+        report_result = SignalResult(
+            signals=signals,
+            total_scanned=len(symbols),
+            market_regime=regime.label,
+            suggested_total_exposure=regime.suggested_exposure,
+            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            rating_summary=rating_dist,
+        )
+        report_gen = ReportGenerator(notifier)
+        report_gen.push_feishu(report_result, webhook_key="rating")
+        logger.info(f"综合推荐报告已推送到飞书: {len(signals)} 只")
+
+        # 同步到腾讯云COS（同时上传评级结果和推荐信号）
+        try:
+            _upload_to_cos(settings, logger, engine, rating_results=all_results, signals=signals if signals else None, regime_result=regime)
+        except Exception as exc:
+            logger.warning(f"COS upload failed: {exc}")
+
+
+def _run_backtest(settings, logger, engine) -> None:
+    """回测模式：对所有策略进行历史回测并输出绩效报告。"""
+    from sequoia_x.backtest.engine import BacktestEngine, BacktestConfig
+    from sequoia_x.backtest.metrics import PerformanceMetrics
+    from sequoia_x.strategy.turtle_trade import TurtleTradeStrategy
+    from sequoia_x.regime import RegimeDetector, REGIME_LABELS
+    from sequoia_x.strategy.ma_volume import MaVolumeStrategy
+    from sequoia_x.strategy.high_tight_flag import HighTightFlagStrategy
+    from sequoia_x.strategy.limit_up_shakeout import LimitUpShakeoutStrategy
+    from sequoia_x.strategy.uptrend_limit_down import UptrendLimitDownStrategy
+    from sequoia_x.strategy.rps_breakout import RpsBreakoutStrategy
+    from datetime import date, timedelta
+    import json, os
+
+    symbols = engine.get_local_symbols()
+    if not symbols:
+        logger.error("无本地数据，请先执行 --backfill")
+        return
+
+    end_date = date.today().strftime("%Y-%m-%d")
+    start_date = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+    logger.info(f"回测区间: {start_date} ~ {end_date}")
+
+    config = BacktestConfig(initial_capital=1_000_000)
+    bt_engine = BacktestEngine(engine, config)
+
+    # 所有策略配置
+    strategies_to_test = [
+        ("TurtleTrade 海龟突破", TurtleTradeStrategy, {"settings": settings}),
+        ("MaVolume 均线放量", MaVolumeStrategy, {"settings": settings}),
+        ("HighTightFlag 高窄旗形", HighTightFlagStrategy, {"settings": settings}),
+        ("LimitUpShakeout 涨停洗盘", LimitUpShakeoutStrategy, {}),
+        ("UptrendLimitDown 上升跌停", UptrendLimitDownStrategy, {}),
+        ("RpsBreakout RPS突破", RpsBreakoutStrategy, {}),
+    ]
+
+    all_reports = {}
+    for name, strategy_cls, kwargs in strategies_to_test:
+        logger.info("=" * 40)
+        logger.info(f"回测: {name}")
+        logger.info("=" * 40)
+        try:
+            result = bt_engine.run(
+                strategy_cls, symbols, start_date, end_date,
+                strategy_kwargs=kwargs,
+            )
+            metrics = PerformanceMetrics.from_trades(result.trades, result.equity_curve)
+            logger.info(metrics.summary())
+            logger.info(f"夏普: {metrics.sharpe_ratio:.2f} | 索提诺: {metrics.sortino_ratio:.2f}")
+            logger.info(f"年化收益: {metrics.annual_return:.1%} | 最大回撤: {metrics.max_drawdown:.1%}")
+            logger.info(f"胜率: {metrics.win_rate:.1%} | 交易次数: {metrics.total_trades}")
+            all_reports[name] = metrics.to_dict()
+        except Exception as e:
+            logger.error(f"回测 {name} 失败: {e}")
+            all_reports[name] = {"error": str(e)}
+
+    # 导出汇总报告
+    os.makedirs("output", exist_ok=True)
+    report = {
+        "date": date.today().strftime("%Y-%m-%d"),
+        "start": start_date,
+        "end": end_date,
+        "strategies": all_reports,
+    }
+    path = f"output/backtest_{date.today().strftime('%Y%m%d')}.json"
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(report, fp, ensure_ascii=False, indent=2)
+    logger.info(f"回测汇总报告已导出: {path}")
+
+
+def _run_regime_check(logger, engine) -> None:
+    """市场状态检测模式。"""
+    from sequoia_x.regime import RegimeDetector
+    detector = RegimeDetector(engine)
+    regime = detector.detect("000905")
+    logger.info("=" * 40)
+    logger.info(f"当前市场状态: {regime.label}")
+    logger.info(f"建议总仓位: {regime.suggested_exposure:.0%}")
+    logger.info(f"趋势强度: {regime.trend_strength:.2f}")
+    logger.info(f"波动率状态: {regime.volatility_regime} (P{regime.volatility_pct:.0%})")
+    logger.info(f"策略偏向: {regime.strategy_bias}")
+    logger.info(f"详情: {regime.details}")
+
+
+def _run_factors(settings, logger, engine, top_n_str: str) -> None:
+    """多因子选股模式。"""
+    from sequoia_x.factors import FactorCalculator, CrossSectionalRanker, FactorConfig
+    import json, os
+
+    # 解析 top_n
+    try:
+        top_n = int(top_n_str.replace("TOP", ""))
+    except ValueError:
+        top_n = 20
+
+    symbols = engine.get_local_symbols()
+    if not symbols:
+        logger.error("无本地数据，请先执行 --backfill")
+        return
+
+    logger.info(f"开始多因子扫描 {len(symbols)} 只股票...")
+    calc = FactorCalculator(engine)
+    factor_results = calc.compute_all(symbols, progress=True)
+    ranked = CrossSectionalRanker.rank_and_combine(factor_results)
+
+    # 飞书推送多因子结果
+    notifier = FeishuNotifier(settings)
+    notifier.send_factor_results(ranked, total_scanned=len(symbols), top_n=top_n)
+
+    top_stocks = ranked[:top_n]
+    logger.info(f"多因子选股 Top {top_n}:")
+    for i, r in enumerate(top_stocks, 1):
+        logger.info(
+            f"  {i:2d}. {r.symbol} | 总分:{r.composite_score:.3f} | "
+            f"价值:{r.factor_percentiles.get('value',0):.2f} "
+            f"动量:{r.factor_percentiles.get('momentum',0):.2f} "
+            f"质量:{r.factor_percentiles.get('quality',0):.2f}"
+        )
+
+    # 导出
+    os.makedirs("output", exist_ok=True)
+    from datetime import date
+    export = []
+    for r in ranked[:max(top_n, 50)]:
+        export.append({
+            "symbol": r.symbol,
+            "composite_score": r.composite_score,
+            "factor_percentiles": r.factor_percentiles,
+            "momentum_12m1": r.momentum_12m1,
+            "pe": r.pe, "pb": r.pb, "roe": r.roe,
+        })
+    path = f"output/factors_{date.today().strftime('%Y%m%d')}.json"
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(export, fp, ensure_ascii=False, indent=2)
+    logger.info(f"多因子结果已导出: {path}")
+
+
+
+def _run_review(settings, logger, engine) -> None:
+    """回溯模式：检查历史推荐命中率并推送到飞书。"""
+    from sequoia_x.tracker import RecommendationTracker
+    from datetime import date
+    import requests, json
+
+    tracker = RecommendationTracker(engine.db_path)
+    stats = tracker.get_stats()
+
+    logger.info("=" * 50)
+    logger.info("推荐命中率回溯")
+    logger.info("=" * 50)
+
+    if stats:
+        logger.info(f"总推荐: {stats['total']} 条")
+        logger.info(f"胜率: {stats['wins']}/{stats['total']} ({stats['win_rate']}%)")
+        logger.info(f"平均收益: {stats['avg_return']}%")
+
+        emoji = "🟢" if stats["win_rate"] >= 40 else "🔴"
+        card = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {"tag": "plain_text", "content": f"{emoji} Sequoia-X 推荐回溯报告"},
+                    "template": "blue",
+                },
+                "elements": [
+                    {"tag": "div", "text": {"tag": "lark_md", "content": (
+                        f"**回溯统计**\n"
+                        f"总推荐: {stats['total']} 条\n"
+                        f"胜率: {stats['wins']}/{stats['total']} ({stats['win_rate']}%)\n"
+                        f"平均收益: {stats['avg_return']}%\n"
+                        f"触及止损: {stats['hit_stop_loss']} 次\n"
+                        f"触及目标: {stats['hit_target_1']} 次"
+                    )}},
+                ],
+            },
+        }
+        try:
+            url = settings.get_webhook_url("ma_volume")
+            requests.post(url, data=json.dumps(card), headers={"Content-Type": "application/json"}, timeout=10)
+            logger.info("回溯报告已推送到飞书")
+        except Exception as exc:
+            logger.error(f"推送失败: {exc}")
+    else:
+        logger.info("暂无已回溯的推荐记录")
+
+    results = tracker.review_pending(engine)
+    if results:
+        logger.info(f"本轮回溯 {len(results)} 条")
+        wins = sum(1 for r in results if r["actual_return"] > 0)
+        logger.info(f"  胜率: {wins}/{len(results)} ({wins/len(results)*100:.0f}%)")
+    logger.info("回溯完成")
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Sequoia-X V2 选股系统")
+    parser.add_argument(
+        "--backfill", action="store_true", help="回填模式：全市场历史K线"
+    )
+    parser.add_argument(
+        "--install-schedule", action="store_true",
+        help="安装每日 21:00 Windows 定时任务",
+    )
+    parser.add_argument(
+        "--remove-schedule", action="store_true",
+        help="卸载定时任务",
+    )
+    parser.add_argument(
+        "--rating", action="store_true",
+        help="评级模式：全市场 7 大策略评分 + 评级推送",
+    )
+    parser.add_argument(
+        "--backtest", action="store_true",
+        help="回测模式：策略历史绩效评估",
+    )
+    parser.add_argument(
+        "--regime", action="store_true",
+        help="市场状态检测：判断牛熊震荡",
+    )
+    parser.add_argument(
+        "--factors", type=str, nargs="?", const="TOP20",
+        help="多因子选股（取排名前N只）",
+    )
+    parser.add_argument(
+        "--mootdx-backfill", action="store_true",
+        help="使用 mootdx 回填历史数据（TCP协议，更稳定）",
+    )
+    parser.add_argument(
+        "--parallel-backfill", action="store_true",
+        help="并行回填历史数据（8进程）",
+    )
+    parser.add_argument(
+        "--review", action="store_true",
+        help="回溯模式：检查历史推荐命中率并推送报告",
+    )
+    args = parser.parse_args()
+
+    # 调度相关命令单独处理（无需初始化整个系统）
+    if args.install_schedule:
+        _install_schedule()
+        return
+    if args.remove_schedule:
+        _remove_schedule()
+        return
+
+    try:
+        settings = get_settings()
+        logger = get_logger(__name__)
+        logger.info("Sequoia-X V2 启动")
+
+        engine = DataEngine(settings)
+
+        if args.backfill:
+            logger.info("进入回填模式...")
+            all_symbols = engine.get_all_symbols()
+            engine.backfill(all_symbols)
+            logger.info("Sequoia-X V2 回填模式运行完成")
+            return
+
+        if args.rating:
+            _run_rating(settings, logger, engine, FeishuNotifier(settings))
+            return
+
+        if args.backtest:
+            _run_backtest(settings, logger, engine)
+            return
+
+        if args.regime:
+            _run_regime_check(logger, engine)
+            return
+
+        if args.factors is not None:
+            _run_factors(settings, logger, engine, args.factors)
+            return
+
+        if args.review:
+            _run_review(settings, logger, engine)
+            return
+
+        if args.parallel_backfill:
+            logger.info("进入并行回填模式...")
+            all_symbols = engine.get_all_symbols()
+            engine.backfill_parallel(all_symbols)
+            logger.info("Sequoia-X V3 并行回填完成")
+            return
+
+        if args.mootdx_backfill:
+            logger.info("进入 mootdx 回填模式...")
+            from sequoia_x.data.engine import _mootdx_get_symbols
+            symbols_df = _mootdx_get_symbols()
+            all_symbols = symbols_df['symbol'].tolist()
+            logger.info(f"mootdx 获取 {len(all_symbols)} 只股票")
+            engine.backfill_from_mootdx(symbols=all_symbols)
+            logger.info("mootdx 回填完成")
+            return
+
+        _run_daily(settings, logger, engine, FeishuNotifier(settings))
+
+    except Exception:
+        try:
+            _logger = get_logger(__name__)
+            _logger.exception("主流程发生未捕获异常，程序终止")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+    logger.info("Sequoia-X V2 运行完成")
+
+
+if __name__ == "__main__":
+    main()
+

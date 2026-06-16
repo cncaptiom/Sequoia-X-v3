@@ -1,0 +1,222 @@
+﻿"""市场状态识别模块：判断 A 股当前处于牛市/熊市/震荡市。
+
+方法论:
+  - 均线排列法：MA5/MA20/MA60/MA120 的多头/空头排列
+  - ATR 趋势强度法：价格偏离 EMA 的标准化距离
+  - 波动率状态：高波/低波环境
+
+机构应用:
+  - 趋势策略（海龟、RPS）在牛市中放大权重
+  - 均值回归策略在震荡市中放大权重
+  - 高波动环境降低总仓位
+
+用法:
+    from sequoia_x.regime import RegimeDetector
+
+    detector = RegimeDetector(data_engine)
+    regime = detector.detect(benchmark_symbol="sh.000300")
+    print(f"当前市场: {regime.label}, 建议仓位: {regime.suggested_exposure:.0%}")
+"""
+
+from dataclasses import dataclass
+from enum import Enum
+
+import numpy as np
+import pandas as pd
+
+from sequoia_x.core.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class MarketRegime(Enum):
+    STRONG_BULL = "strong_bull"      # 强牛：均线多头 + 趋势强劲
+    WEAK_BULL = "weak_bull"          # 弱牛：价格在 MA60 之上但非完美多头
+    RANGE = "range"                  # 震荡：均线缠绕，无明显方向
+    WEAK_BEAR = "weak_bear"          # 弱熊：价格在 MA60 之下但非完美空头
+    STRONG_BEAR = "strong_bear"      # 强熊：均线空头排列
+
+
+REGIME_LABELS = {
+    MarketRegime.STRONG_BULL: "强牛",
+    MarketRegime.WEAK_BULL: "弱牛",
+    MarketRegime.RANGE: "震荡",
+    MarketRegime.WEAK_BEAR: "弱熊",
+    MarketRegime.STRONG_BEAR: "强熊",
+}
+
+# 各状态下的建议仓位
+REGIME_EXPOSURE = {
+    MarketRegime.STRONG_BULL: 1.00,
+    MarketRegime.WEAK_BULL: 0.70,
+    MarketRegime.RANGE: 0.50,
+    MarketRegime.WEAK_BEAR: 0.30,
+    MarketRegime.STRONG_BEAR: 0.15,
+}
+
+# 各状态下的策略类型权重偏向
+REGIME_STRATEGY_BIAS = {
+    # strong_bull: 趋势策略优先
+    MarketRegime.STRONG_BULL: {"trend": 0.50, "momentum": 0.30, "reversal": 0.20},
+    # weak_bull: 趋势为主，加一些反转
+    MarketRegime.WEAK_BULL: {"trend": 0.40, "momentum": 0.35, "reversal": 0.25},
+    # range: 均值回归优先
+    MarketRegime.RANGE: {"trend": 0.20, "momentum": 0.25, "reversal": 0.55},
+    # weak_bear: 防守为主
+    MarketRegime.WEAK_BEAR: {"trend": 0.10, "momentum": 0.30, "reversal": 0.60},
+    # strong_bear: 几乎不做多
+    MarketRegime.STRONG_BEAR: {"trend": 0.00, "momentum": 0.10, "reversal": 0.90},
+}
+
+
+@dataclass
+class RegimeResult:
+    """市场状态检测结果。"""
+    regime: MarketRegime
+    label: str
+    suggested_exposure: float                # 建议总仓位 0~1
+    strategy_bias: dict[str, float]          # 策略类型权重偏向
+    trend_strength: float                     # 趋势强度 (-1 到 +1)
+    volatility_regime: str                    # "high" | "normal" | "low"
+    volatility_pct: float                     # 当前波动率百分位
+    details: str                              # 详细描述
+
+
+class RegimeDetector:
+    """市场状态检测器。
+
+    对基准指数（如沪深300）进行均线和趋势分析，判断市场状态。
+    """
+
+    def __init__(self, data_engine):
+        self.engine = data_engine
+
+    def detect(self, benchmark_symbol: str = "000905") -> RegimeResult:
+        """检测当前市场状态。
+
+        Args:
+            benchmark_symbol: 基准指数 baostock 代码，默认沪深300。
+
+        Returns:
+            RegimeResult。
+        """
+        try:
+            df = self.engine.get_ohlcv(benchmark_symbol)
+        except Exception:
+            logger.warning(f"无法获取基准 {benchmark_symbol} 数据，默认返回震荡市")
+            return RegimeResult(
+                regime=MarketRegime.RANGE,
+                label="震荡(默认)",
+                suggested_exposure=0.50,
+                strategy_bias=REGIME_STRATEGY_BIAS[MarketRegime.RANGE],
+                trend_strength=0.0,
+                volatility_regime="normal",
+                volatility_pct=0.5,
+                details="无法获取基准数据",
+            )
+
+        if df.empty or len(df) < 60:
+            return RegimeResult(
+                regime=MarketRegime.RANGE,
+                label="震荡(数据不足)",
+                suggested_exposure=0.50,
+                strategy_bias=REGIME_STRATEGY_BIAS[MarketRegime.RANGE],
+                trend_strength=0.0,
+                volatility_regime="normal",
+                volatility_pct=0.5,
+                details="基准数据不足",
+            )
+
+        closes = df["close"]
+
+        # ── 均线系统 ──
+        ma5 = closes.rolling(5).mean().iloc[-1]
+        ma20 = closes.rolling(20).mean().iloc[-1]
+        ma60 = closes.rolling(60).mean().iloc[-1]
+        ma120 = closes.rolling(120).mean().iloc[-1] if len(closes) >= 120 else ma60
+        last_close = closes.iloc[-1]
+
+        # ── 趋势强度 (ATR 标准化偏离) ──
+        ema30 = closes.ewm(span=30, adjust=False).mean()
+        atr30 = self._compute_atr(df["high"], df["low"], closes, 30)
+        trend_strength_raw = (last_close - ema30.iloc[-1]) / atr30 if atr30 > 0 else 0
+        trend_strength = float(np.clip(trend_strength_raw / 3.0, -1.0, 1.0))
+
+        # ── 波动率状态 ──
+        returns_60d = closes.pct_change().dropna().tail(60)
+        current_vol = float(returns_60d.std())
+        # 滚动 2 年波动率分布
+        if len(closes) >= 500:
+            rolling_vol = closes.pct_change().rolling(60).std().dropna()
+            vol_percentile = (rolling_vol < current_vol).mean()
+        else:
+            vol_percentile = 0.5
+
+        if vol_percentile > 0.8:
+            vol_regime = "high"
+        elif vol_percentile < 0.2:
+            vol_regime = "low"
+        else:
+            vol_regime = "normal"
+
+        # ── 判断市场状态 ──
+        details_parts = []
+
+        # 1. 均线排列判断
+        if ma5 > ma20 > ma60 > ma120 and last_close > ma5:
+            if trend_strength > 0.3:
+                regime = MarketRegime.STRONG_BULL
+            else:
+                regime = MarketRegime.WEAK_BULL
+        elif ma5 < ma20 < ma60 < ma120 and last_close < ma5:
+            if trend_strength < -0.3:
+                regime = MarketRegime.STRONG_BEAR
+            else:
+                regime = MarketRegime.WEAK_BEAR
+        else:
+            # 非完美排列时，看价格相对 MA60 的位置
+            if last_close > ma60 and ma20 > ma60:
+                regime = MarketRegime.WEAK_BULL
+            elif last_close < ma60 and ma20 < ma60:
+                regime = MarketRegime.WEAK_BEAR
+            else:
+                regime = MarketRegime.RANGE
+
+        # 2. 波动率修正：高波环境向保守调整
+        if vol_regime == "high" and regime in (MarketRegime.STRONG_BULL, MarketRegime.WEAK_BULL):
+            # 高波牛市中适当降低暴露，但保持偏多
+            pass
+        elif vol_regime == "high" and regime == MarketRegime.RANGE:
+            regime = MarketRegime.WEAK_BEAR  # 高波震荡视为偏熊
+
+        suggested_exposure = REGIME_EXPOSURE.get(regime, 0.5)
+        if vol_regime == "high":
+            suggested_exposure *= 0.7
+        elif vol_regime == "low":
+            suggested_exposure = min(suggested_exposure * 1.2, 1.0)
+
+        # ── 生成描述 ──
+        details_parts.append(f"MA5={ma5:.0f} MA20={ma20:.0f} MA60={ma60:.0f}")
+        details_parts.append(f"趋势强度={trend_strength:.2f}")
+        details_parts.append(f"波动率={current_vol:.4f}({vol_regime}, P{vol_percentile:.0%})")
+
+        return RegimeResult(
+            regime=regime,
+            label=REGIME_LABELS.get(regime, "未知"),
+            suggested_exposure=round(suggested_exposure, 2),
+            strategy_bias=REGIME_STRATEGY_BIAS.get(regime, REGIME_STRATEGY_BIAS[MarketRegime.RANGE]),
+            trend_strength=round(trend_strength, 2),
+            volatility_regime=vol_regime,
+            volatility_pct=round(float(vol_percentile), 2),
+            details=" | ".join(details_parts),
+        )
+
+    @staticmethod
+    def _compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> float:
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        return float(tr.tail(period).mean())
