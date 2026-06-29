@@ -29,6 +29,9 @@ def main():
     parser.add_argument("--etf-rotate", action="store_true", help="最新一期轮动信号")
     parser.add_argument("--etf-backtest", action="store_true", help="ETF轮动回测")
     parser.add_argument("--etf-push", action="store_true", help="推送本轮轮动信号到飞书")
+    parser.add_argument("--fund-screen", action="store_true", help="全市场基金多维筛选")
+    parser.add_argument("--fund-type", type=str, default="全部", help="基金类型：股票型/混合型/指数型")
+    parser.add_argument("--top-n", type=int, default=20, help="返回前N只")
     parser.add_argument("--db-path", type=str, default="data/funds.db", help="数据库路径")
     args = parser.parse_args()
 
@@ -68,6 +71,9 @@ def main():
 
     if args.etf_push:
         _run_push()
+
+    if args.fund_screen:
+        _run_fund_screen(args)
 
 
 def _run_rotation():
@@ -179,6 +185,25 @@ def _run_push():
     notifier = FeishuNotifier(webhook)
     notifier.send_rotation_signal(signal, etf_map)
     logger.info("推送完成")
+
+
+def _run_fund_screen(args):
+    """全市场基金筛选。"""
+    from fund_research.analysis.screener import FundScreener
+
+    screener = FundScreener()
+    funds = screener.screen(
+        min_return_1y=0.0,
+        min_return_3y=0.0,
+        fund_type=args.fund_type,
+        top_n=args.top_n,
+    )
+
+    if not funds:
+        logger.warning("无筛选结果，可能数据源暂不可用")
+        return
+
+    screener.print_result(funds)
 
 
 if __name__ == "__main__":
