@@ -4,6 +4,7 @@
 """
 
 import sqlite3
+import time
 from pathlib import Path
 from datetime import date, timedelta
 from typing import Optional
@@ -456,11 +457,15 @@ class DataEngine:
 
         logger.info(f"需要更新 {len(tasks)} 只股票")
 
-        # 优先使用 mootdx（TCP 协议更稳定）
+        # 优先使用 mootdx（TCP 协议更稳定），带快速失败
         all_rows = []
         try:
             logger.info("使用 mootdx 同步...")
+            deadline = time.time() + 60  # 最多尝试 60 秒
             for symbol, bs_code, start, end in tasks:
+                if time.time() > deadline:
+                    logger.warning("mootdx 同步超时（>60s），降级到 baostock")
+                    break
                 try:
                     from mootdx.quotes import Quotes
                     client = Quotes.factory(market='std')

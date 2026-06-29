@@ -493,11 +493,16 @@ def _is_trading_day() -> bool:
         rs = bs.query_trade_dates(start_date=today.strftime("%Y-%m-%d"),
                                    end_date=today.strftime("%Y-%m-%d"))
         is_trading = False
+        has_data = False
         while rs.next():
+            has_data = True
             row = rs.get_row_data()
             if row[1] == "1":  # 1=交易日, 0=非交易日
                 is_trading = True
         bs.logout()
+        # baostock 返回空结果（网络异常或无日历数据），回退到 weekday 判断
+        if not has_data:
+            return True
         return is_trading
     except Exception:
         # fallback: 周一至周五认为是交易日（节假日时会有误判，但保守可用）

@@ -445,3 +445,91 @@ def ma_cross_strategy(
         result.score += 1
 
     return result
+
+
+# ── 策略H: KDJ ──
+
+def kdj_strategy(
+    df: pd.DataFrame,
+    k_period: int = 9,
+    d_period: int = 3,
+    j_period: int = 3,
+) -> StrategyResult:
+    """KDJ 金叉/死叉 + 超卖区金叉。
+
+    定位：辅助评分策略，权重不宜过高。
+    KDJ 在短线转折点判断上比 MACD 灵敏，
+    但单指标有效性较弱，适合与均线/BOLL 配合使用。
+    """
+    result = StrategyResult()
+    if len(df) < 30:
+        return result
+
+    low_min = df["low"].rolling(k_period).min()
+    high_max = df["high"].rolling(k_period).max()
+    denom = (high_max - low_min)
+    rsv = df["close"].copy()
+    mask = denom > 0
+    rsv[mask] = (df["close"] - low_min) / denom * 100
+    rsv[~mask] = 50.0
+
+    k = rsv.ewm(span=d_period, adjust=False).mean()
+    d = k.ewm(span=j_period, adjust=False).mean()
+    j = 3 * k - 2 * d
+
+    k_now, k_prev = k.iloc[-1], k.iloc[-2]
+    d_now, d_prev = d.iloc[-1], d.iloc[-2]
+    j_now = j.iloc[-1]
+
+    # 金叉: K 上穿 D
+    if k_prev <= d_prev and k_now > d_now:
+        if k_now < 25:
+            result.score += 2
+            result.signals.append(
+                f"KDJ-超卖金叉: K({k_now:.1f})上穿D({d_now:.1f})在超卖区"
+            )
+        elif k_now > 75:
+            result.score += 0.5
+            result.signals.append("KDJ-高位金叉: 注意超买风险")
+        else:
+            result.score += 1.5
+            result.signals.append(f"KDJ-金叉: K({k_now:.1f})上穿D({d_now:.1f})")
+
+    # 死叉: K 下穿 D
+    if k_prev >= d_prev and k_now < d_now:
+        if k_now > 75:
+            result.score -= 2
+            result.signals.append(
+                f"KDJ-超买死叉: K({k_now:.1f})从高位下穿D({d_now:.1f})"
+            )
+        else:
+            result.score -= 1
+            result.signals.append(f"KDJ-死叉: K({k_now:.1f})下穿D({d_now:.1f})")
+
+    # 超卖区（辅助 mean_reversion 确认）
+    if k_now < 20 and d_now < 20:
+        result.score += 1
+        result.signals.append(f"KDJ-超卖: K({k_now:.1f}) D({d_now:.1f})")
+
+    # 超买区
+    if k_now > 80 and d_now > 80:
+        result.score -= 1
+        result.signals.append(f"KDJ-超买: K({k_now:.1f}) D({d_now:.1f})")
+
+    # J 值极端
+    if j_now < 0:
+        result.score += 1
+        result.signals.append("KDJ-J值负: 极短线超卖")
+    if j_now > 100:
+        result.score -= 1
+        result.signals.append("KDJ-J值>100: 极短线超买")
+
+    # KDJ 与均线多头共振（增强信号）
+    if len(df) >= 20:
+        ma20 = df["close"].rolling(20).mean().iloc[-1]
+        last_close = df["close"].iloc[-1]
+        if last_close > ma20 and k_now > d_now:
+            result.score += 1
+            result.signals.append("KDJ-均线共振: 价格在MA20之上且KDJ金叉")
+
+    return result
