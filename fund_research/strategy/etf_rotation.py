@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from fund_research.core.logger import get_logger
+from fund_research.data.etf_list import get_etf_map, EtfInfo
 
 logger = get_logger(__name__)
 
