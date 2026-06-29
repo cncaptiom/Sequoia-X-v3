@@ -1,0 +1,7 @@
+pandas>=2.0
+numpy>=1.24
+requests>=2.31
+akshare>=1.14
+python-dotenv>=1.0
+matplotlib>=3.7
+scipy>=1.11
