@@ -17,6 +17,7 @@ import pandas as pd
 from sequoia_x.rating.strategies import (
     StrategyResult,
     atr_channel_strategy,
+    kdj_strategy,
     ma_cross_strategy,
     ma_volume_strategy,
     macd_rsi_strategy,
@@ -56,22 +57,32 @@ class RatingConfig:
 
     macd_rsi_enabled: bool = True
     ma_cross_enabled: bool = True
+
+    kdj_enabled: bool = True
+    kdj_k_period: int = 9
+    kdj_d_period: int = 3
+    kdj_j_period: int = 3
+
     trend_filter_enabled: bool = True
 
-    weight_ma_volume: float = 0.28
-    weight_turtle_trade: float = 0.23
-    weight_mean_reversion: float = 0.16
-    weight_volume_price: float = 0.11
-    weight_atr_channel: float = 0.22
-    weight_macd_rsi: float = 0.12
-    weight_ma_cross: float = 0.12
+    # 默认权重（基于近3年300只股票回测数据优化）
+    # 排序：mean_reversion(1.81%) > ma_volume(1.09%) > volume_price(1.32%) > atr_channel(1.13%)
+    #        > ma_cross(1.09%) > macd_rsi(1.01%) > turtle_trade(0.93%)   权重参考
+    weight_ma_volume: float = 0.18
+    weight_turtle_trade: float = 0.05
+    weight_mean_reversion: float = 0.20
+    weight_volume_price: float = 0.15
+    weight_atr_channel: float = 0.12
+    weight_macd_rsi: float = 0.09
+    weight_ma_cross: float = 0.11
+    weight_kdj: float = 0.06
 
     # ── 策略类别与市场状态权重映射 ──
     # 各策略所属类别
     STRATEGY_CATEGORIES = {
         "trend": ["ma_volume", "turtle_trade", "atr_channel"],
         "momentum": ["macd_rsi", "ma_cross"],
-        "reversal": ["mean_reversion", "volume_price"],
+        "reversal": ["mean_reversion", "volume_price", "kdj"],
     }
     # 策略权重属性名映射
     WEIGHT_ATTRS = {
@@ -82,14 +93,19 @@ class RatingConfig:
         "atr_channel": "weight_atr_channel",
         "macd_rsi": "weight_macd_rsi",
         "ma_cross": "weight_ma_cross",
+        "kdj": "weight_kdj",
     }
-    # 各市场状态下策略类别的偏向权重
+    # 各市场状态下策略类别的偏向权重（基于回测数据优化）
+    # 强牛: trend+reversal接近，momentum较弱
+    # 弱牛: reversal大幅领先，trend接近零
+    # 震荡: 三类接近，reversal略优
+    # 弱熊/强熊: 全部亏损，reversal损失最小
     REGIME_BIAS = {
-        "强牛": {"trend": 0.50, "momentum": 0.30, "reversal": 0.20},
-        "弱牛": {"trend": 0.40, "momentum": 0.35, "reversal": 0.25},
-        "震荡": {"trend": 0.20, "momentum": 0.25, "reversal": 0.55},
-        "弱熊": {"trend": 0.10, "momentum": 0.30, "reversal": 0.60},
-        "强熊": {"trend": 0.00, "momentum": 0.10, "reversal": 0.90},
+        "强牛": {"trend": 0.43, "momentum": 0.22, "reversal": 0.35},
+        "弱牛": {"trend": 0.15, "momentum": 0.30, "reversal": 0.55},
+        "震荡": {"trend": 0.32, "momentum": 0.30, "reversal": 0.38},
+        "弱熊": {"trend": 0.15, "momentum": 0.35, "reversal": 0.50},
+        "强熊": {"trend": 0.05, "momentum": 0.20, "reversal": 0.75},
     }
 
     def apply_regime(self, regime_label: str) -> None:
@@ -137,6 +153,10 @@ class RatingConfig:
             "atrMultiple": self.atr_multiple,
             "macdRsiEnabled": self.macd_rsi_enabled,
             "maCrossEnabled": self.ma_cross_enabled,
+            "kdjEnabled": self.kdj_enabled,
+            "kdjKPeriod": self.kdj_k_period,
+            "kdjDPeriod": self.kdj_d_period,
+            "kdjJPeriod": self.kdj_j_period,
             "trendFilterEnabled": self.trend_filter_enabled,
             "weightMaVolume": self.weight_ma_volume,
             "weightTurtleTrade": self.weight_turtle_trade,
@@ -145,6 +165,7 @@ class RatingConfig:
             "weightAtrChannel": self.weight_atr_channel,
             "weightMacdRsi": self.weight_macd_rsi,
             "weightMaCross": self.weight_ma_cross,
+            "weightKdj": self.weight_kdj,
         }
 
 
@@ -267,6 +288,8 @@ class RatingEngine:
                 self.config.atr_exit_score, self.config.atr_multiple)),
             ("macdRsi", self.config.macd_rsi_enabled, lambda: macd_rsi_strategy(df)),
             ("maCross", self.config.ma_cross_enabled, lambda: ma_cross_strategy(df)),
+            ("kdj", self.config.kdj_enabled, lambda: kdj_strategy(
+                df, self.config.kdj_k_period, self.config.kdj_d_period, self.config.kdj_j_period)),
         ]
 
         for name, enabled, fn in strategy_map:
@@ -323,6 +346,7 @@ class RatingEngine:
             "atrChannel": self.config.weight_atr_channel,
             "macdRsi": self.config.weight_macd_rsi,
             "maCross": self.config.weight_ma_cross,
+            "kdj": self.config.weight_kdj,
         }
         enabled = {"maVolume": self.config.ma_volume_enabled,
                    "turtleTrade": self.config.turtle_trade_enabled,
@@ -330,7 +354,8 @@ class RatingEngine:
                    "volumePrice": self.config.volume_price_enabled,
                    "atrChannel": self.config.atr_channel_enabled,
                    "macdRsi": self.config.macd_rsi_enabled,
-                   "maCross": self.config.ma_cross_enabled}
+                   "maCross": self.config.ma_cross_enabled,
+                   "kdj": self.config.kdj_enabled}
         filtered = {k: v for k, v in weights.items() if enabled.get(k, True)}
         total = sum(filtered.values())
         if total == 0:
@@ -340,7 +365,7 @@ class RatingEngine:
     def _calc_category_scores(self, strategy_scores: dict[str, float]) -> dict[str, float]:
         CATEGORY_MAP = {
             "aggressive": ["maVolume", "turtleTrade", "atrChannel"],
-            "conservative": ["meanReversion", "volumePrice"],
+            "conservative": ["meanReversion", "volumePrice", "kdj"],
             "signal": ["macdRsi", "maCross"],
         }
         scores = {}

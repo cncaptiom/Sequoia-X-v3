@@ -41,15 +41,16 @@ class AnalysisEngine {
     // ===== 第二步：多策略打分 =====
     double totalScore = 0;
 
-    // 动态权重分配：根据启用策略自动归一化
+    // 动态权重分配：从StrategyConfig读取（PC端定期同步，无PC数据时用默认值）
     final weights = <String, double>{};
-    if (config.maVolumeEnabled) weights['maVolume'] = 0.28;
-    if (config.turtleTradeEnabled) weights['turtleTrade'] = 0.23;
-    if (config.meanReversionEnabled) weights['meanReversion'] = 0.16;
-    if (config.volumePriceEnabled) weights['volumePrice'] = 0.11;
-    if (config.atrChannelEnabled) weights['atrChannel'] = 0.22;
-    if (config.macdRsiEnabled) weights['macdRsi'] = 0.12;
-    if (config.maCrossEnabled) weights['maCross'] = 0.12;
+    if (config.maVolumeEnabled) weights['maVolume'] = config.weightMaVolume;
+    if (config.turtleTradeEnabled) weights['turtleTrade'] = config.weightTurtleTrade;
+    if (config.meanReversionEnabled) weights['meanReversion'] = config.weightMeanReversion;
+    if (config.volumePriceEnabled) weights['volumePrice'] = config.weightVolumePrice;
+    if (config.atrChannelEnabled) weights['atrChannel'] = config.weightAtrChannel;
+    if (config.macdRsiEnabled) weights['macdRsi'] = config.weightMacdRsi;
+    if (config.maCrossEnabled) weights['maCross'] = config.weightMaCross;
+    if (config.kdjEnabled) weights['kdj'] = config.weightKdj;
 
     // 归一化权重总和为1.0
     if (weights.isNotEmpty) {
@@ -112,6 +113,14 @@ class AnalysisEngine {
       final result = _maCrossStrategy(closes);
       strategyScores['maCross'] = result.score;
       totalScore += result.score * weights['maCross']!;
+      signals.addAll(result.signals);
+    }
+
+    // 策略H: KDJ 金叉/超卖
+    if (config.kdjEnabled && weights.containsKey('kdj')) {
+      final result = _kdjStrategy(closes, highs, lows);
+      strategyScores['kdj'] = result.score;
+      totalScore += result.score * weights['kdj']!;
       signals.addAll(result.signals);
     }
 
@@ -763,6 +772,147 @@ class AnalysisEngine {
     return _StrategyResult(score: score.total, signals: signals);
   }
 
+  // ==================== 策略H: KDJ ====================
+
+  _StrategyResult _kdjStrategy(
+      List<double> closes, List<double> highs, List<double> lows) {
+    final score = _ScoreCounter();
+    final signals = <Signal>[];
+    final n = closes.length;
+    if (n < 30) return _StrategyResult(score: 0, signals: signals);
+
+    final period = config.kdjKPeriod;
+
+    // 计算 RSV
+    final rsv = List<double>.generate(n, (i) {
+      if (i < period - 1) return 50.0;
+      final lowMin = lows.sublist(i - period + 1, i + 1).reduce(min);
+      final highMax = highs.sublist(i - period + 1, i + 1).reduce(max);
+      final denom = highMax - lowMin;
+      if (denom <= 0) return 50.0;
+      return (closes[i] - lowMin) / denom * 100;
+    });
+
+    // K = SMA(RSV, d_period), D = SMA(K, j_period)
+    final k = _calcSMA(rsv, config.kdjDPeriod);
+    final d = _calcSMA(k, config.kdjJPeriod);
+    final j = List.generate(n, (i) => 3 * k[i] - 2 * d[i]);
+
+    final kNow = k.last;
+    final kPrev = k[n - 2];
+    final dNow = d.last;
+    final dPrev = d[n - 2];
+    final jNow = j.last;
+
+    // 1. K 上穿 D（金叉）
+    if (kPrev <= dPrev && kNow > dNow) {
+      if (kNow < 25) {
+        score.add(2);
+        signals.add(Signal(
+          name: 'KDJ-超卖金叉',
+          type: SignalType.bullish,
+          description: 'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})在超卖区',
+          score: 2,
+        ));
+      } else if (kNow > 75) {
+        score.add(0.5);
+        signals.add(Signal(
+          name: 'KDJ-高位金叉',
+          type: SignalType.neutral,
+          description: 'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})但处于高位',
+          score: 0.5,
+        ));
+      } else {
+        score.add(1.5);
+        signals.add(Signal(
+          name: 'KDJ-金叉',
+          type: SignalType.bullish,
+          description: 'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})',
+          score: 1.5,
+        ));
+      }
+    }
+
+    // 2. K 下穿 D（死叉）
+    if (kPrev >= dPrev && kNow < dNow) {
+      if (kNow > 75) {
+        score.add(-2);
+        signals.add(Signal(
+          name: 'KDJ-超买死叉',
+          type: SignalType.bearish,
+          description: 'K(${kNow.toStringAsFixed(1)})从高位下穿D(${dNow.toStringAsFixed(1)})',
+          score: -2,
+        ));
+      } else {
+        score.add(-1);
+        signals.add(Signal(
+          name: 'KDJ-死叉',
+          type: SignalType.bearish,
+          description: 'K(${kNow.toStringAsFixed(1)})下穿D(${dNow.toStringAsFixed(1)})',
+          score: -1,
+        ));
+      }
+    }
+
+    // 3. 超卖区（辅助 meanReversion 确认）
+    if (kNow < 20 && dNow < 20) {
+      score.add(1);
+      signals.add(Signal(
+        name: 'KDJ-超卖',
+        type: SignalType.bullish,
+        description: 'K(${kNow.toStringAsFixed(1)}) D(${dNow.toStringAsFixed(1)})均在超卖区',
+        score: 1,
+      ));
+    }
+
+    // 4. 超买区
+    if (kNow > 80 && dNow > 80) {
+      score.add(-1);
+      signals.add(Signal(
+        name: 'KDJ-超买',
+        type: SignalType.bearish,
+        description: 'K(${kNow.toStringAsFixed(1)}) D(${dNow.toStringAsFixed(1)})均在超买区',
+        score: -1,
+      ));
+    }
+
+    // 5. J值极端
+    if (jNow < 0) {
+      score.add(1);
+      signals.add(Signal(
+        name: 'KDJ-J值负',
+        type: SignalType.bullish,
+        description: 'J值(${jNow.toStringAsFixed(1)})为负，极短线超卖',
+        score: 1,
+      ));
+    }
+    if (jNow > 100) {
+      score.add(-1);
+      signals.add(Signal(
+        name: 'KDJ-J值>100',
+        type: SignalType.bearish,
+        description: 'J值(${jNow.toStringAsFixed(1)})超过100，极短线超买',
+        score: -1,
+      ));
+    }
+
+    // 6. KDJ与MA20共振（增强信号）
+    if (n >= 20) {
+      final ma20 = _calcMA(closes, 20).last;
+      if (closes.last > ma20 && kNow > dNow) {
+        score.add(1);
+        signals.add(Signal(
+          name: 'KDJ-均线共振',
+          type: SignalType.bullish,
+          description: '价格在MA20之上且KDJ金叉，趋势共振',
+          score: 1,
+        ));
+      }
+    }
+
+    return _StrategyResult(score: score.total, signals: signals);
+  }
+
   // ==================== 工具方法 ====================
 
   List<double> _calcMA(List<double> data, [int period = 5]) {
@@ -801,6 +951,23 @@ class AnalysisEngine {
     for (int i = 1; i < data.length; i++) {
       ema = (data[i] - ema) * multiplier + ema;
       result.add(ema);
+    }
+    return result;
+  }
+
+  /// 计算SMA（Simple Moving Average，用于KDJ的K/D值计算）
+  List<double> _calcSMA(List<double> data, int period) {
+    final result = <double>[];
+    for (int i = 0; i < data.length; i++) {
+      if (i < period - 1) {
+        result.add(data[i]);
+      } else {
+        double sum = 0;
+        for (int j = i - period + 1; j <= i; j++) {
+          sum += data[j];
+        }
+        result.add(sum / period);
+      }
     }
     return result;
   }

@@ -216,8 +216,8 @@ class StockDetailPage extends StatelessWidget {
                     if (analysis == null) return const SizedBox.shrink();
                     final code2 = provider.currentQuote?.code ?? '';
                     final pcRating2 = pcProvider2.getRating(code2);
-                    // 用PC止损止盈覆盖本地数据
-                    final overridden = pcRating2 != null ? _overrideStopTp(analysis, pcRating2) : analysis;
+                    // 用PC数据覆盖本地分析（评分+止损止盈）
+                    final overridden = pcRating2 != null ? _mergeWithPcData(analysis, pcRating2) : analysis;
 
                     return Column(
                       children: [
@@ -251,18 +251,30 @@ class StockDetailPage extends StatelessWidget {
     );
   }
 
-  /// 用PC止损止盈覆盖本地分析结果
-  AnalysisResult _overrideStopTp(AnalysisResult original, dynamic pcRating) {
+  /// 用PC数据覆盖本地分析结果（评分 + 止损止盈 + 买入区间）
+  AnalysisResult _mergeWithPcData(AnalysisResult original, dynamic pcRating) {
+    // 1. 合并策略评分（PC端动态权重评分优先，缺失的用本地补）
+    final mergedScores = Map<String, double>.from(
+        (pcRating.strategyScores as Map<String, dynamic>?)?.map(
+              (k, v) => MapEntry(k, (v as num).toDouble()),
+            ) ?? {});
+    original.strategyScores.forEach((k, v) {
+      mergedScores.putIfAbsent(k, () => v);
+    });
+
+    // 2. 覆盖止损止盈
     final pcStop = (pcRating.stopLossPrice as num?)?.toDouble();
     final pcTp = (pcRating.takeProfitPrice as num?)?.toDouble();
     final pcRange = (pcRating.buyRange as String?);
-    if (pcStop == null && pcTp == null && pcRange == null) return original;
+    final pcScore = (pcRating.totalScore as num?)?.toDouble();
+    final pcTrendDesc = (pcRating.trendDescription as String?);
+
     return AnalysisResult(
       rating: original.rating,
-      totalScore: original.totalScore,
-      strategyScores: original.strategyScores,
+      totalScore: pcScore ?? original.totalScore,
+      strategyScores: mergedScores,
       trendPassed: original.trendPassed,
-      trendDescription: original.trendDescription,
+      trendDescription: pcTrendDesc ?? original.trendDescription,
       riskRewardRatio: original.riskRewardRatio,
       stopLossPrice: pcStop ?? original.stopLossPrice,
       takeProfitPrice: pcTp ?? original.takeProfitPrice,
@@ -764,8 +776,8 @@ class StockDetailPage extends StatelessWidget {
         'key': 'conservative',
         'label': '反转策略',
         'icon': Icons.swap_vert,
-        'strategies': ['meanReversion', 'volumePrice'],
-        'signalKeywords': ['超卖', '超买', 'RSI-底背离', 'RSI-顶背离', '量价'],
+        'strategies': ['meanReversion', 'volumePrice', 'kdj'],
+        'signalKeywords': ['超卖', '超买', 'RSI-底背离', 'RSI-顶背离', '量价', 'KDJ'],
       },
       {
         'key': 'signal',
