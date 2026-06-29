@@ -50,16 +50,18 @@ class FeishuNotifier:
 
         # ── 卫星配置（20%资金）：高弹性基金 ──
         if satellite_funds:
-            lines.append(f"\n**卫星配置（20%资金）— 高弹性基金**\n")
-            lines.append(f"| # | 名称 | 代码 | 近1年 | 近3月 |")
-            lines.append(f"|---|------|------|-------|-------|")
+            lines.append(f"\n**卫星配置（20%资金）— 有动量但不过热**\n")
+            lines.append(f"| # | 名称 | 代码 | 近1年 | 近3月 | 评分 |")
+            lines.append(f"|---|------|------|-------|-------|------|")
             for i, f in enumerate(satellite_funds[:3], 1):
                 name = (f.get("name") or "?")[:16]
                 code = f.get("code", "?")
                 r1 = f.get("return_1y", 0)
                 r3 = f.get("return_3m", 0)
-                lines.append(f"| {i} | {name} | {code} | {r1:+.1f}% | {r3:+.1f}% |")
-            lines.append(f"\n> 高风险卫星仓位：严格止损 -15%，翻倍后卖一半锁利")
+                sc = f.get("_score", 0)
+                lines.append(f"| {i} | {name} | {code} | {r1:+.1f}% | {r3:+.1f}% | {sc:.2f} |")
+            lines.append(f"\n> 筛选条件：近3年>50%、近3月15~80%（避过热的）、近1月正收益")
+            lines.append(f"> 卫星仓位：严格止损 -15%，翻倍后卖一半锁利")
 
         # ── 全市场ETF评分排名（前12） ──
         ranked = sorted(signal.scores.items(), key=lambda x: x[1], reverse=True)

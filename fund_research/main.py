@@ -29,7 +29,8 @@ def main():
     parser.add_argument("--etf-rotate", action="store_true", help="最新一期轮动信号")
     parser.add_argument("--etf-backtest", action="store_true", help="ETF轮动回测")
     parser.add_argument("--etf-push", action="store_true", help="推送本轮轮动信号到飞书")
-    parser.add_argument("--fund-screen", action="store_true", help="全市场基金多维筛选")
+    parser.add_argument("--fund-screen", action="store_true", help="全市场基金筛选（按近1年收益）")
+    parser.add_argument("--fund-satellite", action="store_true", help="卫星配置筛选（有动量但不过热）")
     parser.add_argument("--fund-type", type=str, default="全部", help="基金类型：股票型/混合型/指数型")
     parser.add_argument("--top-n", type=int, default=20, help="返回前N只")
     parser.add_argument("--db-path", type=str, default="data/funds.db", help="数据库路径")
@@ -74,6 +75,9 @@ def main():
 
     if args.fund_screen:
         _run_fund_screen(args)
+
+    if args.fund_satellite:
+        _run_fund_satellite(args)
 
 
 def _run_rotation():
@@ -182,20 +186,18 @@ def _run_push():
         score = signal.scores.get(code, 0)
         print(f"  {i}. {name} ({code})  {score:+.1f}")
 
-    # ── 获取高风险卫星基金 ──
+    # ── 获取卫星基金（有动量但不过热） ──
     satellite = []
     try:
         screener = FundScreener()
-        all_funds = screener.screen(min_return_1y=100, top_n=5)
-        if all_funds:
-            satellite = [
-                {"name": f.get("name", "?"), "code": f.get("code", "?"),
-                 "return_1y": f.get("return_1y", 0), "return_3m": f.get("return_3m", 0)}
-                for f in all_funds[:3]
-            ]
-            print(f"\n高风险卫星推荐:")
+        satellite = screener.screen_satellite(top_n=3)
+        if satellite:
+            print(f"\n卫星配置推荐（有动量但不过热）:")
             for f in satellite:
-                print(f"  {f['name']} ({f['code']})  近1年+{f['return_1y']:.1f}%  近3月+{f['return_3m']:.1f}%")
+                print(f"  {f['name']} ({f['code']})  "
+                      f"近1年+{f['return_1y']:.1f}%  "
+                      f"近3月+{f['return_3m']:.1f}%  "
+                      f"评分{f['_score']}")
     except Exception as e:
         logger.warning(f"卫星基金获取失败: {e}")
 
@@ -222,6 +224,15 @@ def _run_fund_screen(args):
         return
 
     screener.print_result(funds)
+
+
+def _run_fund_satellite(args):
+    """卫星配置筛选。"""
+    from fund_research.analysis.screener import FundScreener
+
+    screener = FundScreener()
+    funds = screener.screen_satellite(top_n=args.top_n if args.top_n else 5)
+    screener.print_satellite_result(funds)
 
 
 if __name__ == "__main__":
