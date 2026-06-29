@@ -41,6 +41,13 @@ class RotationConfig:
     bonus_volume: float = 1.0         # 放量突破
     bonus_holding: float = 1.5        # 上期已持有（降低换手）
 
+    # 波动率控制（惩罚高波动ETF）
+    vol_penalty_threshold: float = 0.80  # 波动率超过此百分位时惩罚
+    vol_penalty_max: float = 1.0         # 最大波动率扣分
+
+    # 趋势过滤（MA60线下降分）
+    trend_filter_penalty: float = 1.0    # 价格在MA60之下时扣分（偏离越远扣越多）
+
     # 拥挤度控制
     max_same_category: int = 2        # 同一行业最多入选几只
 
@@ -62,22 +69,32 @@ class EtfRotationStrategy:
         self._prev_selected: list[str] = []
 
     def run(self, data: dict[str, pd.DataFrame], current_date: str) -> RotationSignal:
-        """执行一期轮动选基。
+        """执行一期轮动选基。"""
+        cfg = self.config
 
-        Args:
-            data: {code: DataFrame(ohlcv)} 全ETF池数据。
-            current_date: 当前交易日。
+        # ── 横截面波动率计算（用于波动率控制） ──
+        vol_list: list[float] = []
+        for code, df in data.items():
+            if len(df) < 21:
+                continue
+            ret = df["close"].pct_change().dropna().tail(20)
+            vol_list.append(float(ret.std()))
 
-        Returns:
-            RotationSignal 包含选中标的和评分。
-        """
+        vol_threshold = 0.0
+        if vol_list:
+            vol_sorted = sorted(vol_list)
+            n = len(vol_sorted)
+            threshold_idx = min(int(n * cfg.vol_penalty_threshold), n - 1)
+            vol_threshold = vol_sorted[threshold_idx]
+
+        # ── 逐只评分 ──
         scores: dict[str, float] = {}
         reasons: dict[str, list[str]] = {}
 
         for code, df in data.items():
-            if len(df) < self.config.min_bars:
+            if len(df) < cfg.min_bars:
                 continue
-            score, sigs = self._score_single(df, code)
+            score, sigs = self._score_single(df, code, vol_threshold)
             if score is not None:
                 scores[code] = score
                 reasons[code] = sigs
@@ -117,15 +134,16 @@ class EtfRotationStrategy:
             reasons=reasons,
         )
 
-    def _score_single(self, df: pd.DataFrame, code: str
+    def _score_single(self, df: pd.DataFrame, code: str,
+                       vol_threshold: float = 0.0
                        ) -> tuple[Optional[float], list[str]]:
         """对单只ETF评分。"""
         signals: list[str] = []
         closes = df["close"].values
         n = len(closes)
+        cfg = self.config
 
         # ── 动量评分 ──
-        cfg = self.config
         mom_score = 0.0
         mom_count = 0
 
@@ -172,6 +190,28 @@ class EtfRotationStrategy:
             if vol_ma20 > 0 and vol[-1] > vol_ma20 * 1.5:
                 total_score += cfg.bonus_volume
                 signals.append(f"放量突破+{cfg.bonus_volume:.0f}")
+
+        # ── 波动率控制 ──
+        if vol_threshold > 0 and n >= 21:
+            ret = pd.Series(closes).pct_change().dropna().tail(20)
+            current_vol = float(ret.std())
+            if current_vol > vol_threshold:
+                # 波动率超过阈值，按超出比例扣分
+                vol_ratio = current_vol / vol_threshold
+                penalty = min((vol_ratio - 1) * cfg.vol_penalty_max, cfg.vol_penalty_max)
+                total_score -= penalty
+                signals.append(f"波动率{current_vol:.4f}惩罚-{penalty:.1f}")
+
+        # ── MA60 趋势过滤 ──
+        if n >= 60:
+            ma60 = pd.Series(closes).rolling(60).mean().iloc[-1]
+            last_close = closes[-1]
+            if last_close < ma60:
+                # 偏离MA60越远扣分越多
+                deviation = (ma60 - last_close) / ma60
+                penalty = min(deviation * 10, cfg.trend_filter_penalty)
+                total_score -= penalty
+                signals.append(f"MA60线下-{penalty:.1f}")
 
         return round(total_score, 2), signals
 

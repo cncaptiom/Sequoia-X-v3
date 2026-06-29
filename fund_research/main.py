@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--etf-list", action="store_true", help="列出ETF标的池")
     parser.add_argument("--etf-rotate", action="store_true", help="最新一期轮动信号")
     parser.add_argument("--etf-backtest", action="store_true", help="ETF轮动回测")
+    parser.add_argument("--etf-push", action="store_true", help="推送本轮轮动信号到飞书")
     parser.add_argument("--db-path", type=str, default="data/funds.db", help="数据库路径")
     args = parser.parse_args()
 
@@ -64,6 +65,9 @@ def main():
 
     if args.etf_backtest:
         _run_backtest()
+
+    if args.etf_push:
+        _run_push()
 
 
 def _run_rotation():
@@ -134,6 +138,47 @@ def _run_backtest():
     )
     print()
     print(result.summary())
+
+
+def _run_push():
+    """推送ETF轮动信号到飞书。"""
+    import os
+    webhook = os.getenv("FEISHU_ETF_WEBHOOK", "")
+    if not webhook:
+        logger.warning("未设置 FEISHU_ETF_WEBHOOK 环境变量，跳过推送")
+        return
+
+    from fund_research.data.etf_fetcher import EtfDataFetcher
+    from fund_research.strategy.etf_rotation import EtfRotationStrategy, RotationConfig
+    from fund_research.notify.feishu import FeishuNotifier
+    from fund_research.data.etf_list import get_etf_map
+
+    fetcher = EtfDataFetcher()
+    data = fetcher.get_all_ohlcv()
+    if not data:
+        logger.error("无ETF数据")
+        return
+
+    latest = fetcher.get_latest_date()
+    if not latest:
+        return
+
+    strategy = EtfRotationStrategy(RotationConfig())
+    signal = strategy.run(data, latest)
+    etf_map = get_etf_map()
+
+    # 打印到控制台
+    print(f"\nETF轮动信号 ({signal.date}):")
+    for i, code in enumerate(signal.selected, 1):
+        info = etf_map.get(code)
+        name = info.name if info else code
+        score = signal.scores.get(code, 0)
+        print(f"  {i}. {name} ({code})  {score:+.1f}")
+
+    # 推送到飞书
+    notifier = FeishuNotifier(webhook)
+    notifier.send_rotation_signal(signal, etf_map)
+    logger.info("推送完成")
 
 
 if __name__ == "__main__":
