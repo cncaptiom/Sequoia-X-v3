@@ -158,6 +158,7 @@ def _run_push():
     from fund_research.strategy.etf_rotation import EtfRotationStrategy, RotationConfig
     from fund_research.notify.feishu import FeishuNotifier
     from fund_research.data.etf_list import get_etf_map
+    from fund_research.analysis.screener import FundScreener
 
     fetcher = EtfDataFetcher()
     data = fetcher.get_all_ohlcv()
@@ -181,9 +182,26 @@ def _run_push():
         score = signal.scores.get(code, 0)
         print(f"  {i}. {name} ({code})  {score:+.1f}")
 
-    # 推送到飞书
+    # ── 获取高风险卫星基金 ──
+    satellite = []
+    try:
+        screener = FundScreener()
+        all_funds = screener.screen(min_return_1y=100, top_n=5)
+        if all_funds:
+            satellite = [
+                {"name": f.get("name", "?"), "code": f.get("code", "?"),
+                 "return_1y": f.get("return_1y", 0), "return_3m": f.get("return_3m", 0)}
+                for f in all_funds[:3]
+            ]
+            print(f"\n高风险卫星推荐:")
+            for f in satellite:
+                print(f"  {f['name']} ({f['code']})  近1年+{f['return_1y']:.1f}%  近3月+{f['return_3m']:.1f}%")
+    except Exception as e:
+        logger.warning(f"卫星基金获取失败: {e}")
+
+    # 推送到飞书（含卫星配置）
     notifier = FeishuNotifier(webhook)
-    notifier.send_rotation_signal(signal, etf_map)
+    notifier.send_rotation_signal(signal, etf_map, satellite_funds=satellite)
     logger.info("推送完成")
 
 
