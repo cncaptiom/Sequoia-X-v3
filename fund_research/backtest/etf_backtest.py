@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from fund_research.core.logger import get_logger
-from fund_research.data.etf_list import get_etf_map
+from fund_research.data.etf_list import get_etf_map, EtfInfo
 
 logger = get_logger(__name__)
 
@@ -137,7 +137,7 @@ class EtfRotationBacktest:
                         buy_sell_pnls.append(pnl)
                         all_trades.append(TradeRecord(
                             date=date_str, code=code,
-                            name=self.etf_map.get(code, EtfInfo("","","")).name if hasattr(self.etf_map.get(code), "name") else code,
+                            name=self.etf_map.get(code, EtfInfo("","","")).name,
                             action="sell", price=price,
                             shares=pos["shares"], value=value, commission=comm,
                         ))
@@ -166,7 +166,7 @@ class EtfRotationBacktest:
                         }
                         all_trades.append(TradeRecord(
                             date=date_str, code=code,
-                            name=self.etf_map.get(code, EtfInfo("","","")).name if hasattr(self.etf_map.get(code), "name") else code,
+                            name=self.etf_map.get(code, EtfInfo("","","")).name,
                             action="buy", price=price,
                             shares=shares, value=cost, commission=cfg.commission * price * shares,
                         ))
