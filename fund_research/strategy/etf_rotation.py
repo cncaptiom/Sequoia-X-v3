@@ -59,6 +59,7 @@ class RotationSignal:
     selected: list[str]               # 选中的ETF代码（买入）
     scores: dict[str, float]          # 各ETF评分
     reasons: dict[str, list[str]]     # 评分理由
+    positions_info: dict[str, dict] = field(default_factory=dict)  # code → {price, atr, stop, target}
 
 
 class EtfRotationStrategy:
@@ -127,11 +128,32 @@ class EtfRotationStrategy:
             f"轮动结果 [{current_date}]: 选中{len(selected)}只 "
             f"{' '.join(etf_map.get(c, EtfInfo('','','')).name for c in selected)}"
         )
+
+        # ── 止损止盈计算（基于ATR） ──
+        positions_info: dict[str, dict] = {}
+        for code in selected:
+            df = data.get(code)
+            if df is None or len(df) < 20:
+                continue
+            closes = df["close"].values
+            current_price = float(closes[-1])
+            atr = self._calc_atr(df, 14)
+            if atr <= 0:
+                continue
+            positions_info[code] = {
+                "price": current_price,
+                "atr": atr,
+                "stop_loss": round(current_price - 2.0 * atr, 3),
+                "target_1": round(current_price + 2.0 * atr, 3),
+                "target_2": round(current_price + 3.0 * atr, 3),
+            }
+
         return RotationSignal(
             date=current_date,
             selected=selected,
             scores=scores,
             reasons=reasons,
+            positions_info=positions_info,
         )
 
     def _score_single(self, df: pd.DataFrame, code: str,
@@ -218,3 +240,22 @@ class EtfRotationStrategy:
     def reset(self):
         """重置状态（新回测前调用）。"""
         self._prev_selected = []
+
+    @staticmethod
+    def _calc_atr(df: pd.DataFrame, period: int = 14) -> float:
+        """计算ATR（Average True Range）。"""
+        if len(df) < period + 1:
+            return 0.0
+        high = df["high"].values
+        low = df["low"].values
+        close = df["close"].values
+        tr = np.maximum(high[-1] - low[-1],
+                        np.maximum(abs(high[-1] - close[-2]),
+                                   abs(low[-1] - close[-2])))
+        # 取最近period天的平均TR
+        tr_list = []
+        for i in range(-period, 0):
+            tr_list.append(max(high[i] - low[i],
+                               abs(high[i] - close[i - 1]),
+                               abs(low[i] - close[i - 1])))
+        return float(np.mean(tr_list)) if tr_list else 0.0
