@@ -157,11 +157,15 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
 
         # 上传组合摘要（用信号数据而非原始评级结果，确保与操作建议一致）
         if signals:
+            # 从评级结果中取真实评分和评级，确保手机端等级（S/A/B/C）和标签一致
+            rating_score_map = {r.symbol: r.total_score for r in (rating_results or [])}
+            rating_map = {r.symbol: r.rating for r in (rating_results or [])}
+            rating_label_map = {r.symbol: r.rating_label for r in (rating_results or [])}
             top_picks = [{
                 "symbol": s.symbol, "name": s.name,
-                "rating": "strong_buy" if s.confidence >= 0.75 else "buy" if s.confidence >= 0.60 else "watch",
-                "rating_label": "强烈推荐" if s.confidence >= 0.75 else "推荐" if s.confidence >= 0.60 else "关注",
-                "total_score": s.confidence * 10,
+                "rating": rating_map.get(s.symbol, "strong_buy" if s.confidence >= 0.75 else "buy" if s.confidence >= 0.60 else "watch"),
+                "rating_label": rating_label_map.get(s.symbol, "强烈推荐" if s.confidence >= 0.75 else "推荐" if s.confidence >= 0.60 else "关注"),
+                "total_score": rating_score_map.get(s.symbol, s.confidence * 10),
                 "current_price": s.current_price,
             } for s in sorted(signals, key=lambda x: x.confidence, reverse=True)[:10]]
         elif rating_results:
@@ -199,6 +203,19 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
         ratings_for_signal = [r.to_dict() for r in rating_results] if rating_results else None
         if not uploader.upload_signals(signals, ratings_for_signal, rl, exp):
             ok = False
+
+    # 上传策略收益率回测数据（如有）
+    import os as _os
+    bt_path = "output/strategy_backtest.json"
+    if _os.path.exists(bt_path):
+        import json as _json
+        try:
+            with open(bt_path, encoding="utf-8") as _f:
+                bt_data = _json.load(_f)
+            if not uploader._put_json("backtest/strategy_performance.json", bt_data):
+                ok = False
+        except Exception as _exc:
+            logger.warning(f"策略回测数据上传失败: {_exc}")
 
     logger.info(f"COS sync {'OK' if ok else 'partial fail'}")
     return ok

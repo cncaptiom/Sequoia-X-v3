@@ -262,14 +262,15 @@ class HomePage extends StatelessWidget {
         ? AppTheme.signalBuy
         : isBuy ? const Color(0xFFFF6B35) : AppTheme.textSecondary;
 
-    // 置信度等级
+    // 置信度等级（阈值基于全市场评分分布校准）
+    // S: 前0.2% (>=1.5分), A: 前7% (>=1.0分), B: 前28% (>=0.5分), C: 其余
     String level;
     Color levelColor;
-    if (pick.totalScore >= 6) {
+    if (pick.totalScore >= 1.5) {
       level = "S"; levelColor = AppTheme.signalBuy;
-    } else if (pick.totalScore >= 4) {
+    } else if (pick.totalScore >= 1.0) {
       level = "A"; levelColor = const Color(0xFFFF6B35);
-    } else if (pick.totalScore >= 2) {
+    } else if (pick.totalScore >= 0.5) {
       level = "B"; levelColor = AppTheme.signalHold;
     } else {
       level = "C"; levelColor = AppTheme.textHint;
