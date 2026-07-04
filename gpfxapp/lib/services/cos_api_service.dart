@@ -84,4 +84,9 @@ class CosApiService {
     if (json == null) return null;
     return json['regime'] as Map<String, dynamic>?;
   }
+
+  /// 获取策略收益率回测数据
+  Future<Map<String, dynamic>?> fetchStrategyBacktest() async {
+    return await _getJson('backtest/strategy_performance.json');
+  }
 }

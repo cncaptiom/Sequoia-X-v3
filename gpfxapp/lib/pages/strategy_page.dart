@@ -205,6 +205,75 @@ class StrategyPage extends StatelessWidget {
 
           const SizedBox(height: 12),
 
+          // 策略近一年收益率（来自PC端回测）
+          Consumer<PcDataProvider>(
+            builder: (context, pcProvider, _) {
+              final bt = pcProvider.strategyBacktest;
+              if (bt == null) return const SizedBox.shrink();
+              final strategies = bt['strategies'] as Map<String, dynamic>?;
+              final meta = bt['meta'] as Map<String, dynamic>?;
+              if (strategies == null || meta == null) return const SizedBox.shrink();
+
+              // 按类别分组
+              final categories = <String, List<MapEntry<String, dynamic>>>{};
+              for (final entry in strategies.entries) {
+                final m = meta[entry.key] as Map<String, dynamic>?;
+                final cat = (m?['category'] as String?) ?? 'unknown';
+                categories.putIfAbsent(cat, () => []).add(entry);
+              }
+
+              final catLabels = {
+                'trend': '趋势型', 'reversal': '反转型', 'momentum': '动量型',
+              };
+              final catColors = {
+                'trend': const Color(0xFF2196F3),
+                'reversal': const Color(0xFFFF6B35),
+                'momentum': const Color(0xFF4CAF50),
+              };
+
+              return _buildSection(
+                title: '策略近一年收益率',
+                subtitle: '信号触发后20日平均收益 | PC端回测',
+                icon: Icons.bar_chart,
+                children: [
+                  for (final cat in ['trend', 'momentum', 'reversal'])
+                    if (categories.containsKey(cat)) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                        child: Row(
+                          children: [
+                            Container(width: 10, height: 10,
+                              decoration: BoxDecoration(
+                                color: (catColors[cat] ?? AppTheme.textHint).withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(catLabels[cat] ?? cat,
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+                          ],
+                        ),
+                      ),
+                      for (final entry in categories[cat]!) ...[
+                        _buildStrategyReturnTile(
+                          key: entry.key,
+                          label: (meta[entry.key]?['label'] as String?) ?? entry.key,
+                          stats: entry.value as Map<String, dynamic>,
+                        ),
+                      ],
+                    ],
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    child: Text('数据基于 ${bt['config']?['sample_size'] ?? '?'} 只股票 ${bt['config']?['date_range'] ?? ''} 回测',
+                      style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
+                  ),
+                ],
+              );
+            },
+          ),
+
+          const SizedBox(height: 12),
+
           // 7大策略开关（简化版，只保留开关，参数由PC端控制）
           _buildSection(
             title: '策略开关',
@@ -254,6 +323,57 @@ class StrategyPage extends StatelessWidget {
           ),
 
           const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
+  /// 构建策略收益率行
+  Widget _buildStrategyReturnTile({
+    required String key,
+    required String label,
+    required Map<String, dynamic> stats,
+  }) {
+    final ret20 = (stats['return_20d'] as num?)?.toDouble() ?? 0;
+    final ret10 = (stats['return_10d'] as num?)?.toDouble() ?? 0;
+    final ret5 = (stats['return_5d'] as num?)?.toDouble() ?? 0;
+    final winRate = (stats['win_rate_20d'] as num?)?.toDouble() ?? 0;
+    final count = (stats['signal_count'] as num?)?.toInt() ?? 0;
+    final insufficient = stats['insufficient_data'] as bool? ?? false;
+
+    final color = ret20 >= 1.0 ? AppTheme.upColor : ret20 > 0 ? AppTheme.signalHold : AppTheme.downColor;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 150,
+            child: Text(label,
+              style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (insufficient)
+            const Expanded(child: Text('数据不足', style: TextStyle(fontSize: 11, color: AppTheme.textHint)))
+          else ...[
+            Expanded(
+              child: Text(
+                '${ret20 >= 0 ? "+" : ""}${ret20.toStringAsFixed(1)}%',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color),
+              ),
+            ),
+            SizedBox(
+              width: 40,
+              child: Text('${winRate.toStringAsFixed(0)}%',
+                style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
+            ),
+            SizedBox(
+              width: 36,
+              child: Text('${count}次',
+                style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
+            ),
+          ],
         ],
       ),
     );

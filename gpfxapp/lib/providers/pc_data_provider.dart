@@ -17,6 +17,7 @@ class PcDataProvider extends ChangeNotifier {
   PcPortfolioSummary? _summary;
   PcFullRatings? _fullRatings;
   Map<String, PcRatingResult> _ratingsMap = {};
+  Map<String, dynamic>? _strategyBacktest;
 
   bool _isLoading = false;
   String? _error;
@@ -47,6 +48,9 @@ class PcDataProvider extends ChangeNotifier {
 
   /// PC端评级数据是否已加载
   bool get hasRatings => _ratingsMap.isNotEmpty;
+
+  /// 策略收益率回测数据
+  Map<String, dynamic>? get strategyBacktest => _strategyBacktest;
 
   /// 将全量评级数据转为 {symbol: {entry_low, stop_loss, ...}} 格式供告警服务使用
   Map<String, Map<String, dynamic>> buildRecommendationsMap() {
@@ -190,6 +194,10 @@ class PcDataProvider extends ChangeNotifier {
           _ratingsMap[r.symbol] = r;
         }
       }
+
+      // 拉取策略收益率回测数据
+      final bt = await _cos.fetchStrategyBacktest();
+      if (bt != null) _strategyBacktest = bt;
 
       // 自动同步PC推荐股票到WatchlistProvider
       _syncAutoRecommend();
