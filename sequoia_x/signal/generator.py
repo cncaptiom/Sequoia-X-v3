@@ -362,18 +362,6 @@ class SignalGenerator:
         # 尝试真实资金流数据（带超时保护）
         if symbol:
             try:
-                import signal as _signal
-                from functools import partial
-
-                def _try_akshare(sym):
-                    import akshare as ak
-                    hsgt = ak.stock_hsgt_individual_em(symbol=sym)
-                    if hsgt is not None and not hsgt.empty and "北向" in str(hsgt.columns):
-                        return 0.03
-                    return 0.0
-
-                # 3秒超时
-                flow_result = 0.0
                 import threading
                 result = [0.0]
                 def _run():
@@ -388,11 +376,10 @@ class SignalGenerator:
                 t.start()
                 t.join(timeout=3)
                 if t.is_alive():
-                    pass  # 超时，忽略
+                    pass  # 超时，后台线程自生自灭（daemon=True）
                 else:
-                    flow_result = result[0]
-                if flow_result > 0:
-                    return flow_result
+                    if result[0] > 0:
+                        return result[0]
             except Exception:
                 pass
 

@@ -235,5 +235,12 @@ class StorageService {
     await Hive.box(_settingsBox).put('pcCachedRatings', ratings);
   }
 
+  Future<String?> getPcCacheTimestamp() async {
+    return Hive.box(_settingsBox).get('pcCacheTimestamp') as String?;
+  }
+
+  Future<void> savePcCacheTimestamp(String iso) async {
+    await Hive.box(_settingsBox).put('pcCacheTimestamp', iso);
+  }
 
 }

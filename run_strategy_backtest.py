@@ -1,7 +1,6 @@
-"""策略信号质量回测：8个评级策略触发后的 N 日收益率统计。
+"""策略信号质量回测：IC追踪 + 五分位数分析 + 信号触发收益。
 
-使用纯函数策略（无需数据库查询），速度快。
-输出 JSON 到 output/strategy_backtest.json，供 COS 上传和手机端消费。
+输出 JSON 到 output/strategy_backtest.json（含 IC 分析、五分位数、衰减曲线）。
 """
 
 import json, os, time
@@ -16,14 +15,9 @@ from sequoia_x.core.config import get_settings
 from sequoia_x.data.engine import DataEngine
 
 from sequoia_x.rating.strategies import (
-    ma_volume_strategy,
-    turtle_trade_strategy,
-    mean_reversion_strategy,
-    volume_price_strategy,
-    atr_channel_strategy,
-    macd_rsi_strategy,
-    ma_cross_strategy,
-    kdj_strategy,
+    ma_volume_strategy, turtle_trade_strategy, mean_reversion_strategy,
+    volume_price_strategy, atr_channel_strategy, macd_rsi_strategy,
+    ma_cross_strategy, kdj_strategy,
 )
 
 STRATEGIES = [
@@ -48,12 +42,61 @@ META = {
     "kdj":           {"label": "KDJ 金叉/超卖",             "category": "reversal"},
 }
 
-# 各策略正信号阈值（score >= 该值视为买入信号，来自实际评分分布观察）
 SCORE_THRESHOLDS = {
     "maVolume": 2.0, "turtleTrade": 2.0, "meanReversion": 1.0,
     "volumePrice": 1.0, "atrChannel": 1.0, "macdRsi": 1.0,
     "maCross": 2.0, "kdj": 1.0,
 }
+
+
+def _rank_ic(scores: list[float], returns: list[float]) -> tuple[float, float]:
+    """Spearman 秩相关。优先用 scipy，没有就用纯 numpy 近似（无 p-value）。"""
+    try:
+        from scipy.stats import spearmanr
+        return spearmanr(scores, returns)
+    except ImportError:
+        pass
+    n = len(scores)
+    if n < 3:
+        return 0.0, 1.0
+    x = np.array(scores)
+    y = np.array(returns)
+    x_rank = np.argsort(np.argsort(x)).astype(float)
+    y_rank = np.argsort(np.argsort(y)).astype(float)
+    d = x_rank - y_rank
+    rho = 1.0 - (6.0 * np.sum(d ** 2)) / (n * (n ** 2 - 1.0))
+    return rho, 0.0
+
+
+def _calc_quantile_returns(scores: list[float], returns: list[float],
+                           n_quantiles: int = 5) -> dict:
+    """计算五分位数收益。"""
+    arr = np.column_stack([scores, returns])
+    arr = arr[~np.isnan(arr[:, 1])]
+    if len(arr) < n_quantiles:
+        return {}
+    # 按评分排序后分五组
+    arr = arr[arr[:, 0].argsort()]
+    k = len(arr) // n_quantiles
+    quantiles = {}
+    for qi in range(n_quantiles):
+        start = qi * k
+        end = (qi + 1) * k if qi < n_quantiles - 1 else len(arr)
+        group = arr[start:end]
+        quantiles[f"q{qi+1}"] = float(np.mean(group[:, 1]))
+    quantiles["spread"] = quantiles.get("q5", 0) - quantiles.get("q1", 0)
+    return quantiles
+
+
+def _compute_turnover(current_quintiles: dict, prev_quintiles: dict) -> float:
+    """计算换手率：与前一期相比，改变五分位数的股票比例。"""
+    if not prev_quintiles:
+        return 0.0
+    common = set(current_quintiles.keys()) & set(prev_quintiles.keys())
+    if not common:
+        return 1.0
+    changed = sum(1 for s in common if current_quintiles[s] != prev_quintiles[s])
+    return changed / len(common)
 
 
 def main():
@@ -67,85 +110,252 @@ def main():
     start = (date.today() - timedelta(days=365)).isoformat()
     print(f"回测区间: {start} ~ {end}", flush=True)
 
-    # 采样 200 只（8策略×200只×200天 ≈ 32万次调用，约5-10分钟）
     rng = np.random.default_rng(42)
     sampled = list(rng.choice(all_symbols, size=min(200, len(all_symbols)), replace=False))
     print(f"采样 {len(sampled)} 只股票", flush=True)
 
     engine.preload_all(sampled)
 
-    # 获取交易日列表
     first = engine.get_ohlcv(sampled[0])
     all_dates = sorted(first[(first["date"] >= start) & (first["date"] <= end)]["date"].tolist())
     print(f"交易日期: {all_dates[0]} ~ {all_dates[-1]} ({len(all_dates)} 天)", flush=True)
 
-    # 结果收集
-    results: dict[str, dict] = {}
+    # ══════════════════════════════════════════
+    # 分析 1：信号触发收益（原有的二元阈值法）
+    # ══════════════════════════════════════════
+    sig_results: dict[str, dict] = {}
     for name, _, _ in STRATEGIES:
-        results[name] = {f"ret_{d}d": [] for d in [5, 10, 20]}
+        sig_results[name] = {f"ret_{d}d": [] for d in [5, 10, 20]}
 
-    # 遍历股票
     for si, sym in enumerate(sampled):
         if (si + 1) % 50 == 0:
-            print(f"  进度: {si+1}/{len(sampled)}", flush=True)
-
+            print(f"  信号分析进度: {si+1}/{len(sampled)}", flush=True)
         df = engine.get_ohlcv(sym)
         if df is None or len(df) < 60:
             continue
         df = df.reset_index(drop=True)
         date_to_idx = {d: i for i, d in enumerate(df["date"].tolist())}
 
-        # 对每个日期
         for current_date in all_dates:
             ci = date_to_idx.get(current_date)
             if ci is None or ci < 30:
                 continue
-
-            # 只传最近 120 根 K 线（大部分策略只需 20-60 根）
             hist = df.iloc[max(0, ci - 120):ci + 1]
 
             for name, strat_fn, params in STRATEGIES:
                 try:
                     res = strat_fn(hist, **params)
-                    threshold = SCORE_THRESHOLDS.get(name, 1.0)
-                    if res.score < threshold:
+                    if res.score < SCORE_THRESHOLDS.get(name, 1.0):
                         continue
-
-                    # 记录 N 日收益
                     for fwd in [5, 10, 20]:
                         fi = ci + fwd
                         if fi < len(df):
-                            entry = float(df.iloc[ci]["close"])
+                            entry_p = float(df.iloc[ci]["close"])
                             exit_p = float(df.iloc[fi]["close"])
-                            results[name][f"ret_{fwd}d"].append((exit_p - entry) / entry)
+                            sig_results[name][f"ret_{fwd}d"].append((exit_p - entry_p) / entry_p)
                 except Exception:
                     continue
 
-    # 聚合统计
-    summary = {}
+    # ══════════════════════════════════════════
+    # 分析 2：IC + 五分位数（日期截面分析）
+    # ══════════════════════════════════════════
+    # 先构建所有股票在各日期的评分矩阵（一次遍历）
+    print("  构建评分矩阵...", flush=True)
+    # date_str → {symbol → {strategy → score}}
+    date_scores: dict[str, dict[str, dict[str, float]]] = {}
+    # date_str → {symbol → price_at_date}
+    date_prices: dict[str, dict[str, float]] = {}
+    all_date_set = set(all_dates)
+
+    for si, sym in enumerate(sampled):
+        if (si + 1) % 50 == 0:
+            print(f"  评分矩阵进度: {si+1}/{len(sampled)}", flush=True)
+        df = engine.get_ohlcv(sym)
+        if df is None or len(df) < 60:
+            continue
+        df = df.reset_index(drop=True)
+        date_to_idx = {d: i for i, d in enumerate(df["date"].tolist())}
+
+        for current_date in all_dates:
+            ci = date_to_idx.get(current_date)
+            if ci is None or ci < 30:
+                continue
+            hist = df.iloc[max(0, ci - 120):ci + 1]
+
+            # 记录价格
+            if current_date not in date_prices:
+                date_prices[current_date] = {}
+            date_prices[current_date][sym] = float(df.iloc[ci]["close"])
+
+            for name, strat_fn, params in STRATEGIES:
+                try:
+                    res = strat_fn(hist, **params)
+                    if current_date not in date_scores:
+                        date_scores[current_date] = {}
+                    if sym not in date_scores[current_date]:
+                        date_scores[current_date][sym] = {}
+                    date_scores[current_date][sym][name] = res.score
+                except Exception:
+                    continue
+
+    print(f"  评分矩阵完成: {len(date_scores)} 个日期", flush=True)
+
+    # 计算 IC
+    ic_data: dict[str, dict] = {}
     for name, _, _ in STRATEGIES:
-        data = results[name]
-        n = len(data["ret_20d"])
-        stats = {"signal_count": n}
-        if n < 3:
-            stats["insufficient_data"] = True
-            summary[name] = stats
+        ic_data[name] = {"ic_series": [], "p_series": [], "quantile_series": [],
+                         "sample_sizes": [], "turnover_series": [],
+                         "decay_ic": {d: [] for d in [1, 5, 10, 20]}}
+
+    print("  计算 IC/五分位数...", flush=True)
+    prev_quintiles: dict[str, dict] = {}
+    date_list_sorted = sorted(date_scores.keys())
+
+    for di, current_date in enumerate(date_list_sorted):
+        if di >= len(date_list_sorted) - 20:
             continue
 
-        stats["insufficient_data"] = False
-        for period in [5, 10, 20]:
-            arr = np.array(data[f"ret_{period}d"])
-            mean_ret = float(np.mean(arr))
-            win_rate = float(np.sum(arr > 0) / len(arr))
-            std_ret = float(np.std(arr, ddof=1))
-            sharpe = mean_ret / std_ret * np.sqrt(250 / period) if std_ret > 0 else 0.0
+        scores_xs: dict[str, dict[str, float]] = {s[0]: {} for s in STRATEGIES}
+        prices_today = date_prices.get(current_date, {})
 
-            stats[f"return_{period}d"] = round(mean_ret * 100, 2)
-            stats[f"win_rate_{period}d"] = round(win_rate * 100, 1)
-            stats[f"sharpe_{period}d"] = round(sharpe, 3)
+        for sym, sym_scores in date_scores[current_date].items():
+            for name, _, _ in STRATEGIES:
+                score = sym_scores.get(name)
+                if score is not None:
+                    scores_xs[name][sym] = score
+
+        # 计算 N 日收益率
+        returns_1: dict[str, float] = {}
+        returns_5: dict[str, float] = {}
+        returns_10: dict[str, float] = {}
+        returns_20: dict[str, float] = {}
+        for offset, ret_dict in [(1, returns_1), (5, returns_5),
+                                  (10, returns_10), (20, returns_20)]:
+            future_date = date_list_sorted[di + offset] if di + offset < len(date_list_sorted) else None
+            if future_date:
+                prices_future = date_prices.get(future_date, {})
+                for sym, price_t in prices_today.items():
+                    price_f = prices_future.get(sym)
+                    if price_t and price_f and price_t > 0:
+                        ret_dict[sym] = (price_f - price_t) / price_t
+
+        # 对每个策略计算 IC 和五分位数
+        current_quintiles: dict[str, dict] = {}
+        for name, _, _ in STRATEGIES:
+            score_dict = scores_xs[name]
+            ret_dict = returns_20
+            common = [s for s in score_dict if s in ret_dict]
+            if len(common) < 10:
+                continue
+
+            score_list = [score_dict[s] for s in common]
+            ret_list = [ret_dict[s] for s in common]
+
+            ic, p_val = _rank_ic(score_list, ret_list)
+            ic_data[name]["ic_series"].append(ic)
+            ic_data[name]["p_series"].append(p_val)
+            ic_data[name]["sample_sizes"].append(len(common))
+
+            # 五分位数
+            qret = _calc_quantile_returns(score_list, ret_list, 5)
+            ic_data[name]["quantile_series"].append(qret)
+
+            # 计算换手率（基于五分位数归属）
+            sorted_syms = [s for s in common]
+            sorted_scores = [score_dict[s] for s in common]
+            # 用 rank(method='first') 打破评分平局，避免 pd.qcut 的 duplicate edges 问题
+            score_arr = np.array(sorted_scores)
+            rank_arr = pd.Series(score_arr).rank(method='first').values
+            qcut = pd.qcut(rank_arr, 5, labels=range(5))
+            if qcut is not None and len(qcut) == len(sorted_syms):
+                current_quintiles[name] = {sorted_syms[i]: int(qcut[i])
+                                            for i in range(len(sorted_syms))}
+                if name in prev_quintiles:
+                    to = _compute_turnover(current_quintiles[name], prev_quintiles[name])
+                    ic_data[name]["turnover_series"].append(to)
+
+            # 衰减曲线：不同 forward 天的 IC
+            for fwd, ret_dict in [(1, returns_1), (5, returns_5),
+                                   (10, returns_10), (20, returns_20)]:
+                fwd_common = [s for s in score_dict if s in ret_dict]
+                if len(fwd_common) >= 10:
+                    ic_fwd, _ = _rank_ic(
+                        [score_dict[s] for s in fwd_common],
+                        [ret_dict[s] for s in fwd_common],
+                    )
+                    ic_data[name]["decay_ic"][fwd].append(ic_fwd)
+
+        prev_quintiles = current_quintiles
+
+    # ══════════════════════════════════════════
+    # 聚合结果
+    # ══════════════════════════════════════════
+    summary = {}
+    for name, _, _ in STRATEGIES:
+        stats = {}
+
+        # ── 原有信号分析 ──
+        sd = sig_results[name]
+        n_signals = len(sd["ret_20d"])
+        stats["signal_count"] = n_signals
+        if n_signals >= 3:
+            stats["insufficient_data"] = False
+            for period in [5, 10, 20]:
+                arr = np.array(sd[f"ret_{period}d"])
+                mean_ret = float(np.mean(arr))
+                win_rate = float(np.sum(arr > 0) / len(arr))
+                std_ret = float(np.std(arr, ddof=1))
+                sharpe = mean_ret / std_ret * np.sqrt(250 / period) if std_ret > 0 else 0.0
+                stats[f"return_{period}d"] = round(mean_ret * 100, 2)
+                stats[f"win_rate_{period}d"] = round(win_rate * 100, 1)
+                stats[f"sharpe_{period}d"] = round(sharpe, 3)
+        else:
+            stats["insufficient_data"] = True
+
+        # ── IC 分析 ──
+        icd = ic_data[name]
+        ic_series = icd["ic_series"]
+        if ic_series:
+            stats["ic_analysis"] = {
+                "mean_ic": round(float(np.mean(ic_series)), 4),
+                "ic_std": round(float(np.std(ic_series)), 4),
+                "ic_ir": round(float(np.mean(ic_series)) / max(float(np.std(ic_series)), 1e-6), 4),
+                "ic_positive_pct": round(float(np.sum(np.array(ic_series) > 0)) / len(ic_series) * 100, 1),
+                "ic_samples": len(ic_series),
+            }
+            # 衰减曲线
+            decay = {}
+            for fwd in [1, 5, 10, 20]:
+                fwd_ics = icd["decay_ic"][fwd]
+                if fwd_ics:
+                    decay[f"{fwd}d"] = round(float(np.mean(fwd_ics)), 4)
+            stats["ic_analysis"]["decay_curve"] = decay
+
+            # 五分位数平均收益
+            q_series = icd["quantile_series"]
+            if q_series:
+                q_avg = {}
+                for qk in ["q1", "q2", "q3", "q4", "q5", "spread"]:
+                    vals = [q.get(qk, 0) for q in q_series]
+                    q_avg[qk] = round(float(np.mean(vals)) * 100, 2)
+                stats["ic_analysis"]["avg_quantile_returns"] = q_avg
+
+            # 平均换手率
+            to_series = icd["turnover_series"]
+            if to_series:
+                stats["ic_analysis"]["avg_turnover"] = round(float(np.mean(to_series)) * 100, 1)
 
         summary[name] = stats
-        print(f"  {name:<15} 信号{n:>4}次  5日{stats['return_5d']:>6.2f}%  10日{stats['return_10d']:>6.2f}%  20日{stats['return_20d']:>6.2f}%  胜率{stats['win_rate_20d']}%")
+
+        # 打印
+        sig_str = (f"  信号{n_signals:>4}次  5日{stats.get('return_5d',0):>6.2f}%  "
+                   f"20日{stats.get('return_20d',0):>6.2f}%") if n_signals >= 3 else "  信号不足"
+        ic_str = ""
+        if "ic_analysis" in stats:
+            ica = stats["ic_analysis"]
+            ic_str = f"  IC={ica.get('mean_ic',0):+.4f}  IR={ica.get('ic_ir',0):.2f}  "
+            ic_str += f"五分位数价差={ica.get('avg_quantile_returns',{}).get('spread',0):+.2f}%"
+        print(f"  {name:<15}{sig_str}{ic_str}", flush=True)
 
     output = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),

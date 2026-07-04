@@ -77,24 +77,39 @@ class StrategyPage extends StatelessWidget {
           ),
 
           // 策略权重说明（Regime动态调整，非固定值）
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppTheme.primaryDark.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.primaryDark.withOpacity(0.2)),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.info_outline, size: 18, color: AppTheme.primaryDark),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text('策略权重由PC端根据市场状态动态分配，当前为弱熊市，反转策略优先，趋势策略权重降低。',
-                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          Consumer<PcDataProvider>(
+            builder: (context, pcProvider, _) {
+              final regime = pcProvider.marketRegimeLabel;
+              String hint;
+              if (regime.contains('强牛') || regime.contains('弱牛')) {
+                hint = '当前$regime，建议顺势而为，趋势策略优先。';
+              } else if (regime.contains('震荡')) {
+                hint = '当前$regime，建议高抛低吸，反转策略优先。';
+              } else if (regime.contains('熊')) {
+                hint = '当前$regime，以防守为主，降低趋势策略权重。';
+              } else {
+                hint = '策略权重由PC端根据市场状态动态分配，当前$regime。';
+              }
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryDark.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.primaryDark.withOpacity(0.2)),
                 ),
-              ],
-            ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 18, color: AppTheme.primaryDark),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(hint,
+                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
 
           // 交易风格
@@ -233,9 +248,22 @@ class StrategyPage extends StatelessWidget {
 
               return _buildSection(
                 title: '策略近一年收益率',
-                subtitle: '信号触发后20日平均收益 | PC端回测',
+                subtitle: '信号触发后20日平均收益 | IC: 评分与收益秩相关',
                 icon: Icons.bar_chart,
                 children: [
+                  // 表头
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 150, child: Text('策略', style: TextStyle(fontSize: 10, color: AppTheme.textHint))),
+                        const Expanded(child: Text('20日收益', style: TextStyle(fontSize: 10, color: AppTheme.textHint))),
+                        const SizedBox(width: 40, child: Text('IC', style: TextStyle(fontSize: 10, color: AppTheme.textHint))),
+                        const SizedBox(width: 36, child: Text('IR', style: TextStyle(fontSize: 10, color: AppTheme.textHint))),
+                        const SizedBox(width: 36, child: Text('价差', style: TextStyle(fontSize: 10, color: AppTheme.textHint))),
+                      ],
+                    ),
+                  ),
                   for (final cat in ['trend', 'momentum', 'reversal'])
                     if (categories.containsKey(cat)) ...[
                       Padding(
@@ -262,6 +290,8 @@ class StrategyPage extends StatelessWidget {
                         ),
                       ],
                     ],
+                  // IC 统计摘要
+                  _buildIcSummary(strategies, meta),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                     child: Text('数据基于 ${bt['config']?['sample_size'] ?? '?'} 只股票 ${bt['config']?['date_range'] ?? ''} 回测',
@@ -328,20 +358,25 @@ class StrategyPage extends StatelessWidget {
     );
   }
 
-  /// 构建策略收益率行
+  /// 构建策略收益率行（含 IC 指标）
   Widget _buildStrategyReturnTile({
     required String key,
     required String label,
     required Map<String, dynamic> stats,
   }) {
     final ret20 = (stats['return_20d'] as num?)?.toDouble() ?? 0;
-    final ret10 = (stats['return_10d'] as num?)?.toDouble() ?? 0;
-    final ret5 = (stats['return_5d'] as num?)?.toDouble() ?? 0;
-    final winRate = (stats['win_rate_20d'] as num?)?.toDouble() ?? 0;
     final count = (stats['signal_count'] as num?)?.toInt() ?? 0;
     final insufficient = stats['insufficient_data'] as bool? ?? false;
 
-    final color = ret20 >= 1.0 ? AppTheme.upColor : ret20 > 0 ? AppTheme.signalHold : AppTheme.downColor;
+    // IC 分析数据
+    final icAnalysis = stats['ic_analysis'] as Map<String, dynamic>?;
+    final meanIc = (icAnalysis?['mean_ic'] as num?)?.toDouble();
+    final icIr = (icAnalysis?['ic_ir'] as num?)?.toDouble();
+    final quantileReturns = icAnalysis?['avg_quantile_returns'] as Map<String, dynamic>?;
+    final spread = (quantileReturns?['spread'] as num?)?.toDouble();
+
+    final retColor = ret20 >= 1.0 ? AppTheme.upColor : ret20 > 0 ? AppTheme.signalHold : AppTheme.downColor;
+    final icColor = (meanIc != null) ? (meanIc > 0 ? AppTheme.upColor : AppTheme.downColor) : AppTheme.textHint;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
@@ -360,20 +395,77 @@ class StrategyPage extends StatelessWidget {
             Expanded(
               child: Text(
                 '${ret20 >= 0 ? "+" : ""}${ret20.toStringAsFixed(1)}%',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: retColor),
               ),
             ),
             SizedBox(
               width: 40,
-              child: Text('${winRate.toStringAsFixed(0)}%',
+              child: Text(meanIc != null ? meanIc.toStringAsFixed(3) : '-',
+                style: TextStyle(fontSize: 10, color: icColor)),
+            ),
+            SizedBox(
+              width: 36,
+              child: Text(icIr != null ? icIr.toStringAsFixed(2) : '-',
                 style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
             ),
             SizedBox(
               width: 36,
-              child: Text('${count}次',
-                style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
+              child: Text(spread != null ? '${spread >= 0 ? "+" : ""}${spread.toStringAsFixed(1)}%' : '-',
+                style: TextStyle(fontSize: 10,
+                  color: spread != null ? (spread > 0 ? AppTheme.upColor : AppTheme.downColor) : AppTheme.textHint)),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// IC 统计摘要行：显示最佳/最差 IC、衰减策略
+  Widget _buildIcSummary(Map<String, dynamic> strategies, Map<String, dynamic> meta) {
+    // 提取各策略 IC 数据
+    final icList = <Map<String, dynamic>>[];
+    for (final entry in strategies.entries) {
+      final stats = entry.value as Map<String, dynamic>?;
+      final icAnalysis = stats?['ic_analysis'] as Map<String, dynamic>?;
+      final m = meta[entry.key] as Map<String, dynamic>?;
+      final label = (m?['label'] as String?) ?? entry.key;
+      if (icAnalysis != null) {
+        final meanIc = (icAnalysis['mean_ic'] as num?)?.toDouble() ?? 0;
+        final spread = ((icAnalysis['avg_quantile_returns'] as Map<String, dynamic>?)?
+            ?['spread'] as num?)?.toDouble() ?? 0;
+        icList.add({'name': label, 'ic': meanIc, 'spread': spread, 'key': entry.key});
+      }
+    }
+    if (icList.isEmpty) return const SizedBox.shrink();
+
+    icList.sort((a, b) => (b['ic'] as double).compareTo(a['ic'] as double));
+    final best = icList.first;
+    final worst = icList.last;
+
+    // 检查是否有衰减策略
+    final decayed = strategies.entries.where((e) {
+      final icA = (e.value as Map<String, dynamic>?)?['ic_analysis'] as Map<String, dynamic>?;
+      final avgIc = (icA?['mean_ic'] as num?)?.toDouble() ?? 0;
+      return avgIc < 0;
+    }).toList();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // IC 排名
+          Text('IC排名: ${best['name']} ${(best['ic'] as double).toStringAsFixed(3)}',
+            style: const TextStyle(fontSize: 10, color: AppTheme.upColor)),
+          if (decayed.isNotEmpty)
+            Text('IC为负: ${decayed.map((e) {
+              final m = meta[e.key] as Map<String, dynamic>?;
+              return (m?['label'] as String?) ?? e.key;
+            }).join(', ')}（权重已降低）',
+              style: const TextStyle(fontSize: 10, color: AppTheme.signalSell)),
+          // 最佳价差
+          Text('最佳价差: ${best['name']} ${(best['spread'] as double).toStringAsFixed(1)}%',
+            style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
         ],
       ),
     );

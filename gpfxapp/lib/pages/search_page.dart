@@ -19,7 +19,6 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMixin {
   final _searchController = TextEditingController();
   int _rankingTab = 0; // 0=涨幅榜, 1=跌幅榜, 2=成交额榜
-  bool _discoveryLoaded = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -27,6 +26,7 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadDiscoveryData());
   }
 
   @override
@@ -137,12 +137,6 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
   // ==================== 发现股票（排行榜+板块） ====================
 
   Widget _buildDiscovery() {
-    // 首次进入时加载数据
-    if (!_discoveryLoaded) {
-      _discoveryLoaded = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _loadDiscoveryData());
-    }
-
     return Consumer<StockProvider>(
       builder: (context, provider, _) {
         return ListView(

@@ -100,6 +100,7 @@ class EtfRotationBacktest:
         # ── 构建交易日历 ──
         all_dates = self._build_trading_dates(data, start_date, end_date)
         rebalance_dates = all_dates[::cfg.hold_days]
+        rebalance_set = set(str(d) for d in rebalance_dates)
         logger.info(f"交易日: {len(all_dates)}天, 调仓日: {len(rebalance_dates)}次")
 
         # ── 逐期模拟 ──
@@ -120,8 +121,14 @@ class EtfRotationBacktest:
                     data_view[code] = df[mask].copy()
 
             # ── 调仓日：执行轮动 ──
-            if date_str in [str(d) for d in rebalance_dates]:
-                selected = strategy(data_view, date_str)
+            if date_str in rebalance_set:
+                # 用前一日数据评分，避免使用当日收盘价的未来信息偏差
+                score_view: dict[str, pd.DataFrame] = {}
+                for code, df in data_view.items():
+                    prev = df[df["date"] < date_str]
+                    if not prev.empty:
+                        score_view[code] = prev
+                selected = strategy(score_view, date_str)
 
                 # 卖出不在新组合中的持仓
                 for code in list(positions.keys()):
