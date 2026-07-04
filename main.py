@@ -57,7 +57,7 @@ def _check_data_freshness(engine, logger) -> dict:
     total = report.get("total_symbols", 0)
     fresh = total - stale
     logger.info(f"数据新鲜度: {fresh}/{total} 只5日内有更新, {stale} 只数据过期")
-    if stale > total * 0.3 if total > 0 else False:
+    if total > 0 and stale > total * 0.3:
         logger.warning(f"超过30%股票数据过期，选股结果可能不准确！建议执行 --backfill 或检查网络")
     return report
 
@@ -186,15 +186,6 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
 
         # 上传优先监控列表（Serenity 产业链瓶颈标的）
         _upload_priority_watchlist(uploader, engine, regime_result)
-        rs = {}
-        for r in rating_results:
-            rs[r.rating] = rs.get(r.rating, 0) + 1
-        if not uploader.upload_portfolio_summary(
-            top_picks, rs,
-            regime_result.label if regime_result else "",
-            regime_result.suggested_exposure if regime_result else 0.0,
-        ):
-            ok = False
 
     # 上传完整信号数据（手机端操作建议主数据源）
     if signals:
@@ -327,8 +318,12 @@ def _run_daily(settings, logger, engine, notifier) -> None:
     for strategy in all_strategies:
         strategy_name = type(strategy).__name__
         logger.info(f"执行策略：{strategy_name}")
-        selected: list[str] = strategy.run()
-        logger.info(f"{strategy_name} 选出 {len(selected)} 只股票")
+        try:
+            selected: list[str] = strategy.run()
+            logger.info(f"{strategy_name} 选出 {len(selected)} 只股票")
+        except Exception as e:
+            logger.error(f"{strategy_name} 执行失败: {e}")
+            selected = []
         strategy_results[strategy_name] = selected
 
     # ── B 阶段：多策略融合评分（按市场状态加权） ──
@@ -386,8 +381,7 @@ def _run_daily(settings, logger, engine, notifier) -> None:
     logger.info(f"融合结果已保存: {len(records)} 只")
 
     if multi_strategy:
-        top_multi = consensus_results[:30]
-        logger.info(f"多策略确认: {len(top_multi)} 只（不单独推送，见推荐报告）")
+        logger.info(f"多策略确认: {len(multi_strategy)} 只（不单独推送，见推荐报告）")
 
     # ── C 阶段：精选评分与详细分析（直接用 SignalGenerator 做统一排序） ──
     top5_symbols = [s.symbol for s in top_consensus[:5]]
@@ -507,20 +501,22 @@ def _is_trading_day() -> bool:
     try:
         import baostock as bs
         bs.login()
-        rs = bs.query_trade_dates(start_date=today.strftime("%Y-%m-%d"),
-                                   end_date=today.strftime("%Y-%m-%d"))
-        is_trading = False
-        has_data = False
-        while rs.next():
-            has_data = True
-            row = rs.get_row_data()
-            if row[1] == "1":  # 1=交易日, 0=非交易日
-                is_trading = True
-        bs.logout()
-        # baostock 返回空结果（网络异常或无日历数据），回退到 weekday 判断
-        if not has_data:
-            return True
-        return is_trading
+        try:
+            rs = bs.query_trade_dates(start_date=today.strftime("%Y-%m-%d"),
+                                       end_date=today.strftime("%Y-%m-%d"))
+            is_trading = False
+            has_data = False
+            while rs.next():
+                has_data = True
+                row = rs.get_row_data()
+                if row[1] == "1":  # 1=交易日, 0=非交易日
+                    is_trading = True
+            # baostock 返回空结果（网络异常或无日历数据），回退到 weekday 判断
+            if not has_data:
+                return True
+            return is_trading
+        finally:
+            bs.logout()
     except Exception:
         # fallback: 周一至周五认为是交易日（节假日时会有误判，但保守可用）
         return True
@@ -533,6 +529,7 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     logger.info("=" * 50)
 
     from sequoia_x.rating.engine import RatingEngine
+    import json, requests
 
     # 数据新鲜度报告
     _check_data_freshness(engine, logger)
@@ -572,14 +569,37 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                 f"atr={rating_config.weight_atr_channel:.2f} macdRsi={rating_config.weight_macd_rsi:.2f} maCross={rating_config.weight_ma_cross:.2f}")
     rating_engine = RatingEngine(config=rating_config)
 
+    # IC 追踪（信号质量监控）
+    from sequoia_x.signal.quality import ICTracker
+    ic_tracker = ICTracker()
+
     # 全市场扫描
     all_results = rating_engine.scan_market(
         symbols=symbols,
         data_loader=lambda s: engine.get_ohlcv(s),
-        top_n=99999,  # 不限数量，用于后续三类评分排序
+        top_n=99999,
         min_bars=60,
+        ic_tracker=ic_tracker,
     )
     logger.info(f"评级完成，上榜 {len(all_results)} 只")
+
+    # 计算 IC（处理 pending 快照）
+    ic_tracker.eval_forward_returns(engine, lookforward_days=5)
+    ic_tracker.eval_forward_returns(engine, lookforward_days=20)
+
+    # 根据 IC 调整权重（检测到衰减的策略降权）
+    base_weights = rating_engine._get_normalized_weights()
+    adjusted = ic_tracker.adjust_weights(base_weights)
+    for s, w in adjusted.items():
+        attr = RatingConfig.WEIGHT_ATTRS.get(s)
+        if attr:
+            current = getattr(rating_config, attr, w)
+            if abs(current - w) > 0.01:
+                object.__setattr__(rating_config, attr, round(w, 4))
+    logger.info(f"IC调整后权重: {adjusted}")
+
+    # 打印 IC 质量报告
+    ic_tracker.print_summary()
 
     # 填充股票名称
     for r in all_results:
@@ -594,6 +614,7 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     # 评级统计已合并到操作建议卡片中，不再单独推送评级报告
 
     # 因子交叉验证：对 strong_buy + buy 股票计算多因子得分
+    today_str = datetime.now().strftime("%Y%m%d")
     strong_and_buy = [r for r in all_results if r.rating in ("strong_buy", "buy")]
     if strong_and_buy:
         from sequoia_x.factors import FactorCalculator, CrossSectionalRanker
@@ -630,7 +651,6 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                 high_quality.append(f"{name}({ar.symbol})")
 
         if elements:
-            import json, requests
             header_note = ""
             if high_quality:
                 header_note = f"\n**\u2b50 技术面+基本面双优：** {' / '.join(high_quality[:10])}\n"

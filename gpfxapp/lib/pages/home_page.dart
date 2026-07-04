@@ -45,19 +45,7 @@ class HomePage extends StatelessWidget {
             const MarketOverview(),
             const SizedBox(height: 8),
 
-            
-            // PC端精选推荐（从COS拉取）
-            // 同步PC端推荐数据到WatchlistProvider（供价格告警使用）
-            Consumer2<PcDataProvider, WatchlistProvider>(
-              builder: (context, pcProvider, watchProvider, _) {
-                if (pcProvider.isAvailable && pcProvider.hasRatings) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    watchProvider.setPcRecommendations(pcProvider.buildRecommendationsMap());
-                  });
-                }
-                return const SizedBox.shrink();
-              },
-            ),
+
             Consumer<PcDataProvider>(
               builder: (context, pcProvider, _) {
                 // 即使PC端数据未加载完成，也显示标题区域

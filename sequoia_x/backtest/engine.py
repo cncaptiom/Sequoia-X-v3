@@ -207,16 +207,7 @@ class BacktestEngine:
         for i in range(cfg.min_bars, len(all_dates)):
             current_date = all_dates[i]
 
-            # -- 1. 增量更新策略预加载 --
-            pre = getattr(strategy, "_preloaded", None)
-            if pre is not None:
-                for sym in list(pre.keys()):
-                    if sym in all_data:
-                        new_rows = all_data[sym][all_data[sym]["date"] == current_date]
-                        if not new_rows.empty:
-                            pre[sym] = pd.concat([pre[sym], new_rows], ignore_index=True)
-
-            # -- 2. 运行选股策略 --
+            # -- 1. 运行选股策略（reference_date 由策略基类 get_data() 自动切片） --
             try:
                 # 设置参考日期（替代 date.today() 的新鲜度检查）
                 if hasattr(strategy, 'reference_date'):

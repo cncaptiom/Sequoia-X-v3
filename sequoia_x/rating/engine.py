@@ -9,6 +9,7 @@
 """
 
 from dataclasses import dataclass, field, asdict
+from datetime import date
 from typing import Optional
 
 import numpy as np
@@ -450,8 +451,10 @@ class RatingEngine:
         data_loader,
         top_n: int = 20,
         min_bars: int = 60,
+        ic_tracker=None,
     ) -> list[AnalysisResult]:
         all_results: list[AnalysisResult] = []
+        failed = 0
         for symbol in symbols:
             try:
                 df = data_loader(symbol)
@@ -460,7 +463,20 @@ class RatingEngine:
                 result = self.analyze(df, symbol)
                 all_results.append(result)
             except Exception:
+                failed += 1
+                if failed <= 5 or failed % 100 == 0:
+                    logger.debug(f"扫描 [{symbol}] 跳过 (异常#{failed})")
                 continue
+
+        # 记录评分到 IC Tracker
+        if ic_tracker is not None:
+            scores_by_symbol = {}
+            for r in all_results:
+                if r.strategy_scores:
+                    scores_by_symbol[r.symbol] = dict(r.strategy_scores)
+            if scores_by_symbol:
+                date_str = date.today().strftime("%Y-%m-%d")
+                ic_tracker.record_scores(date_str, scores_by_symbol)
 
         def sort_key(r: AnalysisResult) -> tuple:
             rating_order = {

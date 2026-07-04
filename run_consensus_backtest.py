@@ -3,8 +3,7 @@
 对比单策略 vs 多策略共识的表现。
 """
 import os, sys, time, json
-os.environ['DB_PATH'] = 'data/sequoia_v2.db'
-os.environ['FEISHU_WEBHOOK_URL'] = 'https://open.feishu.cn/open-apis/bot/v2/hook/p'
+os.environ.setdefault('DB_PATH', 'data/sequoia_v2.db')
 
 import sqlite3, pandas as pd, numpy as np
 from datetime import date, timedelta
@@ -123,17 +122,7 @@ def multi_strategy_backtest():
         for i in range(min_bars, len(all_dates)):
             current_date = all_dates[i]
 
-            # 更新预加载数据
-            for _, strategy in strategies:
-                pre = getattr(strategy, "_preloaded", None)
-                if pre is not None:
-                    for sym in list(pre.keys()):
-                        if sym in engine._cache:
-                            new_rows = engine._cache[sym][engine._cache[sym]["date"] == current_date]
-                            if not new_rows.empty:
-                                pre[sym] = pd.concat([pre[sym], new_rows], ignore_index=True)
-
-            # 运行全部策略
+            # 运行全部策略（reference_date 由策略基类 get_data() 自动切片）
             results = run_strategies(strategies, engine._cache, current_date)
 
             # 共识评分
@@ -214,13 +203,6 @@ def multi_strategy_backtest():
         for i in range(min_bars, len(all_dates)):
             current_date = all_dates[i]
             strategy.reference_date = current_date
-            pre = getattr(strategy, "_preloaded", None)
-            if pre is not None:
-                for sym in list(pre.keys()):
-                    if sym in engine._cache:
-                        new_rows = engine._cache[sym][engine._cache[sym]["date"] == current_date]
-                        if not new_rows.empty:
-                            pre[sym] = pd.concat([pre[sym], new_rows], ignore_index=True)
 
             selected = strategy.run() or []
 
@@ -242,7 +224,10 @@ def multi_strategy_backtest():
                     pnl = (ex_price - pos["entry_price"]) * pos["quantity"]
                     pnl -= pos["entry_price"] * pos["quantity"] * commission
                     pnl -= ex_price * pos["quantity"] * commission
-                    trades.append({"symbol": sym, "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct*100,2), "reason": reason})
+                    trades.append({"symbol": sym, "entry": pos["entry_date"], "exit": current_date,
+                                   "entry_price": pos["entry_price"], "exit_price": ex_price,
+                                   "quantity": pos["quantity"], "pnl": round(pnl, 2),
+                                   "pnl_pct": round(pnl_pct*100,2), "reason": reason})
                     capital += pnl
                     del positions[sym]
 

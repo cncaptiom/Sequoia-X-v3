@@ -1134,11 +1134,6 @@ class StockDetailPage extends StatelessWidget {
     final rr = (pcRating.riskRewardRatio as num?)?.toDouble() ?? 0;
     final score = (pcRating.totalScore as num?)?.toDouble() ?? 0;
 
-    // 如果止损价高于现价，说明股价已跌破止损位，止损不再有意义
-    final effectiveStopLoss = (stopLoss != null && currentPrice < stopLoss) ? null : stopLoss;
-    // 如果止盈价低于现价，说明已突破止盈
-    final effectiveTakeProfit = (takeProfit != null && currentPrice > takeProfit) ? null : takeProfit;
-
     // 解析买入区间
     double entryLow = 0, entryHigh = 0;
     if (buyRange.isNotEmpty) {

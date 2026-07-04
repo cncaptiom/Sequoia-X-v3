@@ -49,9 +49,16 @@ class BaseStrategy(ABC):
         self._preloaded = data
 
     def get_data(self, symbol: str) -> pd.DataFrame:
-        """获取股票数据：优先预加载缓存，回退到引擎。"""
+        """获取股票数据：优先预加载缓存，回退到引擎。
+
+        回测模式下（设置了 reference_date），自动将数据切片到该日期，
+        防止未来信息泄漏。
+        """
         if self._preloaded and symbol in self._preloaded:
-            return self._preloaded[symbol]
+            df = self._preloaded[symbol]
+            if self.reference_date is not None:
+                df = df[df["date"] <= self.reference_date]
+            return df
         return self.engine.get_ohlcv(symbol)
 
     @abstractmethod

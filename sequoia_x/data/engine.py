@@ -203,6 +203,31 @@ class DataValidator:
             return False, 999
 
     @staticmethod
+    def compute_staleness_report(db_path: str) -> dict:
+        """生成数据新鲜度报告。"""
+        cutoff = (date.today() - timedelta(days=5)).isoformat()
+        with sqlite3.connect(db_path) as conn:
+            total = conn.execute(
+                "SELECT COUNT(DISTINCT symbol) FROM stock_daily"
+            ).fetchone()[0]
+            fresh = conn.execute(
+                "SELECT COUNT(DISTINCT symbol) FROM stock_daily WHERE date >= ?",
+                (cutoff,),
+            ).fetchone()[0]
+            latest = conn.execute(
+                "SELECT MAX(date) FROM stock_daily"
+            ).fetchone()[0]
+        stale = total - fresh
+        return {
+            "total": total,
+            "fresh": fresh,
+            "stale": stale,
+            "stale_pct": round(stale / total * 100, 1) if total > 0 else 0,
+            "latest_date": latest or "无数据",
+            "warning": stale > total * 0.3 if total > 0 else True,
+        }
+
+    @staticmethod
     def compute_data_health_report(db_path: str) -> dict:
         """生成数据健康报告（股票数、日期范围、异常检测）。
 
@@ -218,28 +243,21 @@ class DataValidator:
         import sqlite3
         report = {}
         with sqlite3.connect(db_path) as conn:
-            # 基本统计
             report["total_symbols"] = conn.execute("SELECT COUNT(DISTINCT symbol) FROM stock_daily").fetchone()[0]
             report["total_rows"] = conn.execute("SELECT COUNT(*) FROM stock_daily").fetchone()[0]
             row = conn.execute("SELECT MIN(date), MAX(date) FROM stock_daily").fetchone()
             report["date_range"] = f"{row[0]} ~ {row[1]}" if row else "无数据"
-
-            # 活跃度
             recent = conn.execute("""
                 SELECT date, COUNT(DISTINCT symbol) FROM stock_daily
                 WHERE date >= date('now', '-5 days')
                 GROUP BY date ORDER BY date
             """).fetchall()
             report["active_daily"] = {d: c for d, c in recent} if recent else {}
-
-            # 数据不足的股票
             report["thin_symbols"] = conn.execute("""
                 SELECT COUNT(*) FROM (
                     SELECT COUNT(*) as cnt FROM stock_daily GROUP BY symbol HAVING cnt < 60
                 )
             """).fetchone()[0]
-
-            # 新鲜度
             stale = conn.execute("""
                 SELECT COUNT(DISTINCT symbol) FROM stock_daily
                 WHERE symbol NOT IN (
@@ -248,8 +266,6 @@ class DataValidator:
                 )
             """).fetchone()[0]
             report["stale_symbols"] = stale
-
-            # 价格异常
             anomalies = conn.execute("""
                 SELECT COUNT(*) FROM stock_daily a
                 JOIN stock_daily b ON a.symbol = b.symbol
@@ -258,35 +274,11 @@ class DataValidator:
                     AND ABS((a.close - b.close) / b.close) > 0.20
             """).fetchone()[0]
             report["price_anomalies"] = anomalies
-
         report["healthy"] = (
             report.get("stale_symbols", 0) < report.get("total_symbols", 1) * 0.1
             and report.get("active_daily", {})
         )
         return report
-        """生成数据新鲜度报告。"""
-        cutoff = (date.today() - timedelta(days=5)).isoformat()
-        with sqlite3.connect(db_path) as conn:
-            total = conn.execute(
-                "SELECT COUNT(DISTINCT symbol) FROM stock_daily"
-            ).fetchone()[0]
-            fresh = conn.execute(
-                "SELECT COUNT(DISTINCT symbol) FROM stock_daily WHERE date >= ?",
-                (cutoff,),
-            ).fetchone()[0]
-            # 查找最新数据日期
-            latest = conn.execute(
-                "SELECT MAX(date) FROM stock_daily"
-            ).fetchone()[0]
-        stale = total - fresh
-        return {
-            "total": total,
-            "fresh": fresh,
-            "stale": stale,
-            "stale_pct": round(stale / total * 100, 1) if total > 0 else 0,
-            "latest_date": latest or "无数据",
-            "warning": stale > total * 0.3 if total > 0 else True,
-        }
 
 
 def _bs_fetch_batch(tasks: list) -> list:
@@ -677,7 +669,6 @@ class DataEngine:
                 return []
             finally:
                 bs.logout()
-            bs.logout()
 
     def get_local_symbols(self) -> list[str]:
         with sqlite3.connect(self.db_path) as conn:

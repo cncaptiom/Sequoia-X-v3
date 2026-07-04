@@ -187,7 +187,9 @@ class EtfRotationStrategy:
         if mom_count == 0:
             return None, signals
 
-        total_score = mom_score / mom_count if mom_count > 0 else 0
+        # 固定权重总和归一化：缺失数据时评分自然降低，不被人为抬高
+        total_expected_weight = cfg.weight_mom_1m + cfg.weight_mom_3m + cfg.weight_mom_6m
+        total_score = mom_score / total_expected_weight
 
         # ── 趋势加分 ──
         if n >= 21:

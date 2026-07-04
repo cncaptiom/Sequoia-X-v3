@@ -93,9 +93,6 @@ class PerformanceMetrics:
 
         gross_profit = sum(wins) if wins else 0.0
         gross_loss = abs(sum(losses)) if losses else 0.0
-
-        gross_profit = sum(wins) if wins else 0.0
-        gross_loss = abs(sum(losses)) if losses else 0.0
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
         hold_days = [t.hold_days for t in trades]

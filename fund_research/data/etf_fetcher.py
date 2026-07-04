@@ -6,6 +6,14 @@ ETF在交易所和股票同一通道交易，K线获取方式完全相同。
 
 import sqlite3
 import os
+
+
+def _get_mootdx_client():
+    """获取 mootdx 客户端实例（带缓存）。"""
+    from mootdx.quotes import Quotes
+    if not hasattr(_get_mootdx_client, "_client"):
+        _get_mootdx_client._client = Quotes.factory(market='std')
+    return _get_mootdx_client._client
 from datetime import date, timedelta
 from typing import Optional
 
@@ -91,8 +99,7 @@ class EtfDataFetcher:
     def _fetch_single(self, code: str) -> int:
         """拉取单只ETF日K线（复用 mootdx）。"""
         try:
-            from mootdx.quotes import Quotes
-            client = Quotes.factory(market='std')
+            client = _get_mootdx_client()
             df = client.bars(symbol=code, frequency=9, start=0, count=800)
             if df is None or df.empty:
                 return 0
@@ -131,9 +138,9 @@ class EtfDataFetcher:
 
     def _fetch_from_baostock(self, code: str) -> int:
         """从 baostock 获取ETF K线（备选）。"""
+        import baostock as bs
+        bs.login()
         try:
-            import baostock as bs
-            bs.login()
             rs = bs.query_history_k_data_plus(
                 code, "date,open,high,low,close,volume,amount",
                 start_date="2010-01-01",
@@ -144,7 +151,6 @@ class EtfDataFetcher:
             while rs.next():
                 row = rs.get_row_data()
                 rows.append(row)
-            bs.logout()
 
             if not rows:
                 return 0
@@ -160,6 +166,8 @@ class EtfDataFetcher:
             return len(df)
         except Exception:
             return 0
+        finally:
+            bs.logout()
 
     def _write_batch(self, df: pd.DataFrame):
         """批量写入数据库。"""

@@ -10,6 +10,7 @@ from sequoia_x.data.engine import DataEngine
 from sequoia_x.backtest.engine import BacktestEngine, BacktestConfig
 from sequoia_x.backtest.metrics import PerformanceMetrics
 from sequoia_x.strategy.ma_volume import MaVolumeStrategy
+from sequoia_x.core.config import get_settings
 
 # 6 组参数
 PARAMS = [
@@ -26,8 +27,7 @@ conn = sqlite3.connect("data/sequoia_v2.db")
 symbols = [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM stock_daily LIMIT 500").fetchall()]
 conn.close()
 
-engine = DataEngine.__new__(DataEngine)
-engine.db_path = "data/sequoia_v2.db"
+engine = DataEngine(get_settings())
 
 def make_settings(short, long, vol):
     """创建带自定义参数的 Settings 实例。"""

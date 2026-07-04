@@ -145,7 +145,7 @@ class StockQuote {
     final volumeVal = double.tryParse(data['f47']?.toString() ?? '0') ?? 0;
     final amountVal = double.tryParse(data['f48']?.toString() ?? '0') ?? 0;
     final changeAmt = (double.tryParse(data['f49']?.toString() ?? '0') ?? 0) / 100;
-    final changePct = (double.tryParse(data['f50']?.toString() ?? '0') ?? 0) / 100;
+    final changePct = double.tryParse(data['f50']?.toString() ?? '0') ?? 0;
     final turnover = (double.tryParse(data['f168']?.toString() ?? '0') ?? 0) / 100;
     final amplitude = double.tryParse(data['f152']?.toString() ?? '0') ?? 0;
     final peVal = double.tryParse(data['f52']?.toString() ?? '0') ?? 0;
@@ -216,40 +216,4 @@ class StockQuote {
     );
   }
 
-  factory StockQuote.fromSina(String raw, String code) {
-    // 新浪财经API格式: "var hq_str_sh600519="名称,今开,昨收,当前价,最高,最低,..."
-    final parts = raw.split(',');
-    if (parts.length < 30) throw Exception('Invalid sina data');
-
-    final name = parts[0].split('="').last;
-    final open = double.tryParse(parts[1]) ?? 0;
-    final preClose = double.tryParse(parts[2]) ?? 0;
-    final current = double.tryParse(parts[3]) ?? 0;
-    final high = double.tryParse(parts[4]) ?? 0;
-    final low = double.tryParse(parts[5]) ?? 0;
-    final volumeVal = double.tryParse(parts[8]) ?? 0;
-    final amountVal = double.tryParse(parts[9]) ?? 0;
-
-    return StockQuote(
-      code: code,
-      name: name,
-      currentPrice: current,
-      yesterdayClose: preClose,
-      openPrice: open,
-      highPrice: high,
-      lowPrice: low,
-      volume: volumeVal / 100,
-      amount: amountVal / 10000,
-      changePercent: preClose > 0 ? ((current - preClose) / preClose * 100) : 0,
-      changeAmount: current - preClose,
-      turnoverRate: 0,
-      amplitude: 0,
-      pe: 0,
-      pb: 0,
-      marketCap: 0,
-      circulatingMarketCap: 0,
-      volumeRatio: 0,
-      time: DateTime.now(),
-    );
-  }
 }

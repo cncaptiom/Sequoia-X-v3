@@ -112,8 +112,12 @@ class PcDataProvider extends ChangeNotifier {
           _ratingsMap[r.symbol] = r;
         }
       }
+      // 恢复缓存时间戳
+      final ts = await _storage.getPcCacheTimestamp();
+      if (ts != null) {
+        _lastFetch = DateTime.tryParse(ts);
+      }
       if (_summary != null || _fullRatings != null) {
-        _lastFetch = DateTime.now();
         _syncAutoRecommend();
       }
     } catch (_) {}
@@ -168,6 +172,10 @@ class PcDataProvider extends ChangeNotifier {
           }).toList(),
         });
       }
+      // 缓存时间戳
+      if (_lastFetch != null) {
+        await _storage.savePcCacheTimestamp(_lastFetch!.toIso8601String());
+      }
     } catch (_) {}
   }
 
@@ -202,13 +210,10 @@ class PcDataProvider extends ChangeNotifier {
       // 自动同步PC推荐股票到WatchlistProvider
       _syncAutoRecommend();
 
-      // 保存到Hive本地缓存（确保Provider重建后仍可恢复）
-      _saveToCache();
-
       _error = null;
       _lastFetch = DateTime.now();
-
-      // 如果拉到了策略配置且用户未自定义，则同步
+      // 保存到Hive本地缓存（含时间戳，确保Provider重建后仍可恢复）
+      _saveToCache();
       if (_fullRatings != null && _fullRatings!.strategyConfig.isNotEmpty) {
         final config = await _storage.getStrategyConfig();
         // 只有用户未自定义时才同步PC端配置
@@ -250,10 +255,11 @@ class PcDataProvider extends ChangeNotifier {
     await refresh();
   }
 
-  /// 自动同步PC推荐股票到WatchlistProvider展示
+  /// 自动同步PC推荐股票到WatchlistProvider展示和告警
   void _syncAutoRecommend() {
     if (_watchlistProvider == null) return;
     try {
+      // 同步展示列表
       final topPicks = _summary?.topPicks ?? [];
       if (topPicks.isNotEmpty) {
         final pickData = topPicks.map((p) => {
@@ -265,6 +271,11 @@ class PcDataProvider extends ChangeNotifier {
           'currentPrice': p.currentPrice,
         }).toList();
         _watchlistProvider.updatePcRecommendedStocks(pickData);
+      }
+      // 同步告警数据索引
+      final recs = buildRecommendationsMap();
+      if (recs.isNotEmpty) {
+        _watchlistProvider.setPcRecommendations(recs);
       }
     } catch (_) {}
   }
