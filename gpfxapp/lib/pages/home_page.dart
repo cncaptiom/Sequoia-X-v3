@@ -88,6 +88,19 @@ class HomePage extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Text('建议仓位: ${(exposure * 100).toInt()}%', style: const TextStyle(color: AppTheme.textHint, fontSize: 12)),
                       ),
+                    // 推荐统计行
+                    if (picks.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: _buildPicksSummary(picks),
+                      ),
+                    // 数据新鲜度
+                    if (pcProvider.lastFetch != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                        child: Text('数据更新于 ${pcProvider.lastFetch!.toLocal().toString().substring(0, 16)}',
+                            style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
+                      ),
                     if (picks.isEmpty && !isLoading)
                       // 无数据时引导提示
                       Container(
@@ -180,6 +193,32 @@ class HomePage extends StatelessWidget {
     );
   }
 
+  Widget _buildPicksSummary(List<dynamic> picks) {
+    int s = 0, a = 0, b = 0, sustained = 0;
+    for (final p in picks) {
+      final sc = (p.totalScore as num?)?.toDouble() ?? 0;
+      if (sc >= 1.5) s++;
+      else if (sc >= 1.0) a++;
+      else if (sc >= 0.5) b++;
+      final cd = (p.consecutiveDays as num?)?.toInt() ?? 1;
+      if (cd >= 3) sustained++;
+    }
+    return Row(children: [
+      if (s > 0) _summaryChip('S $s', AppTheme.signalBuy),
+      if (a > 0) ...[const SizedBox(width: 6), _summaryChip('A $a', const Color(0xFFFF6B35))],
+      if (b > 0) ...[const SizedBox(width: 6), _summaryChip('B $b', AppTheme.signalHold)],
+      if (sustained > 0) ...[const SizedBox(width: 6), _summaryChip('持续$sustained', AppTheme.signalBuy)],
+    ]);
+  }
+  Widget _summaryChip(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(text, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+    );
+  }
   Widget _buildEmptyWatchlist(BuildContext context) {
     return Container(
       margin: const EdgeInsets.all(16),

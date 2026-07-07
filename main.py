@@ -19,7 +19,7 @@
 评级模式流程：
   A. 同步今日数据
   B. 全市场7大策略评分（MaVolume/TurtleTrade/均值回归/量价关系/ATR通道/MACD+RSI/MA交叉）
-  C. 5档评级分类（强烈买入/买入/观望/关注/回避）
+  C. 5档评级分类（S级/A级/B级/C级/回避）
   D. 飞书推送评级报告
 """
 import argparse
@@ -102,6 +102,60 @@ def _upload_priority_watchlist(uploader, engine, regime_result=None):
     return uploader._put_json("priority/today.json", data)
 
 
+def _track_consecutive(top_picks: list[dict]):
+    """追踪推荐股票的持续入选天数，更新 top_picks 内每个项的 consecutive_days。
+
+    数据存储在 output/consecutive_tracker.json：
+      { "stocks": {"000429": {"days": 5, "last_date": "2026-07-04"}} }
+    """
+    import json, os
+    from datetime import date
+
+    tracker_path = "output/consecutive_tracker.json"
+    tracker: dict = {"stocks": {}}
+    if os.path.exists(tracker_path):
+        try:
+            with open(tracker_path, encoding="utf-8") as f:
+                tracker = json.load(f)
+        except Exception:
+            pass
+
+    today = date.today().isoformat()
+    stocks = tracker.setdefault("stocks", {})
+
+    # 为当前 top_picks 中的每只股票更新持续天数
+    symbols_today = set()
+    for pick in top_picks:
+        sym = pick["symbol"]
+        symbols_today.add(sym)
+        entry = stocks.get(sym, {"days": 0})
+        if entry.get("last_date") == today:
+            # 同一天多次运行，不重复计数
+            pass
+        else:
+            entry["days"] = entry.get("days", 0) + 1
+        entry["last_date"] = today
+        stocks[sym] = entry
+        pick["consecutive_days"] = entry["days"]
+
+    # 按持续天数 + 评分重新排序：持续≥3天的优先，其次按评分
+    if top_picks:
+        top_picks.sort(key=lambda x: (
+            -(x.get("consecutive_days", 1) >= 3),   # 持续≥3天的排前面
+            -x.get("consecutive_days", 1),           # 持续天数多的排前面
+            -x.get("total_score", 0),                # 同分按评分
+        ))
+
+    # 不在今天列表的股票，days 不变（只记录最后出现日期）
+    for sym, entry in stocks.items():
+        if sym not in symbols_today:
+            entry["last_date"] = entry.get("last_date", today)
+
+    os.makedirs("output", exist_ok=True)
+    with open(tracker_path, "w", encoding="utf-8") as f:
+        json.dump(tracker, f, ensure_ascii=False, indent=2)
+
+
 def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, regime_result=None):
     if not settings.cos_enabled:
         logger.info("COS not enabled, skip")
@@ -164,7 +218,7 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
             top_picks = [{
                 "symbol": s.symbol, "name": s.name,
                 "rating": rating_map.get(s.symbol, "strong_buy" if s.confidence >= 0.75 else "buy" if s.confidence >= 0.60 else "watch"),
-                "rating_label": rating_label_map.get(s.symbol, "强烈推荐" if s.confidence >= 0.75 else "推荐" if s.confidence >= 0.60 else "关注"),
+                "rating_label": rating_label_map.get(s.symbol, "S级" if s.confidence >= 0.75 else "A级" if s.confidence >= 0.60 else "关注"),
                 "total_score": rating_score_map.get(s.symbol, s.confidence * 10),
                 "current_price": s.current_price,
             } for s in sorted(signals, key=lambda x: x.confidence, reverse=True)[:10]]
@@ -174,6 +228,10 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
                 "rating": r.rating, "rating_label": r.rating_label,
                 "total_score": r.total_score, "current_price": r.current_price,
             } for r in rating_results[:10]]
+
+        # ── 持续天数追踪 ──
+        _track_consecutive(top_picks)
+
         rs = {}
         for r in rating_results or []:
             rs[r.rating] = rs.get(r.rating, 0) + 1
@@ -590,8 +648,13 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     # 根据 IC 调整权重（检测到衰减的策略降权）
     base_weights = rating_engine._get_normalized_weights()
     adjusted = ic_tracker.adjust_weights(base_weights)
+    # _get_normalized_weights 返回 CamelCase（"maVolume"），WEIGHT_ATTRS 用 snake_case
+    _CAMEL_TO_SNAKE = {"maVolume": "ma_volume", "turtleTrade": "turtle_trade",
+                       "meanReversion": "mean_reversion", "volumePrice": "volume_price",
+                       "atrChannel": "atr_channel", "macdRsi": "macd_rsi",
+                       "maCross": "ma_cross", "kdj": "kdj"}
     for s, w in adjusted.items():
-        attr = RatingConfig.WEIGHT_ATTRS.get(s)
+        attr = RatingConfig.WEIGHT_ATTRS.get(_CAMEL_TO_SNAKE.get(s, s))
         if attr:
             current = getattr(rating_config, attr, w)
             if abs(current - w) > 0.01:
@@ -612,80 +675,6 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     logger.info(f"强烈买入: {strong_buy}, 买入: {buy}")
 
     # 评级统计已合并到操作建议卡片中，不再单独推送评级报告
-
-    # 因子交叉验证：对 strong_buy + buy 股票计算多因子得分
-    today_str = datetime.now().strftime("%Y%m%d")
-    strong_and_buy = [r for r in all_results if r.rating in ("strong_buy", "buy")]
-    if strong_and_buy:
-        from sequoia_x.factors import FactorCalculator, CrossSectionalRanker
-        buy_symbols = [r.symbol for r in strong_and_buy]
-        logger.info(f"因子交叉验证: 对 {len(buy_symbols)} 只 strong_buy/buy 股票计算基本面...")
-        fc = FactorCalculator(engine)
-        f_results = fc.compute_all(buy_symbols, progress=False)
-        f_ranked = CrossSectionalRanker.rank_and_combine(f_results)
-        f_map = {r.symbol: r for r in f_ranked}
-
-        # 构建因子验证卡片
-        elements = []
-        high_quality = []  # 技术面 + 基本面双优
-        for ar in strong_and_buy:
-            fr = f_map.get(ar.symbol)
-            if not fr or fr.composite_score <= 0:
-                continue
-            name = getattr(ar, "name", "") or stock_names.get(ar.symbol, ar.symbol)
-            fp = fr.factor_percentiles
-            fund_parts = []
-            if fr.pe is not None: fund_parts.append(f"PE:{fr.pe:.1f}")
-            if fr.pb is not None: fund_parts.append(f"PB:{fr.pb:.1f}")
-            if fr.roe is not None: fund_parts.append(f"ROE:{fr.roe:.1f}%")
-            fund_str = " | ".join(fund_parts) if fund_parts else "无基本面数据"
-            elements.append(
-                f"**{name} ({ar.symbol})** 评级:{ar.rating_label} 技术分:{ar.total_score} | "
-                f"因子总分:{fr.composite_score:.3f}\n"
-                f"价值:{fp.get('value',0):.3f} 质量:{fp.get('quality',0):.3f} "
-                f"动量:{fp.get('momentum',0):.3f} 低波:{fp.get('low_vol',0):.3f} 规模:{fp.get('size',0):.3f}\n"
-                f"{fund_str}"
-            )
-            # 双优判定：技术分 >= 4 且因子总分 >= 0.5
-            if ar.total_score >= 4 and fr.composite_score >= 0.5:
-                high_quality.append(f"{name}({ar.symbol})")
-
-        if elements:
-            header_note = ""
-            if high_quality:
-                header_note = f"\n**\u2b50 技术面+基本面双优：** {' / '.join(high_quality[:10])}\n"
-            payload = {
-                "msg_type": "interactive",
-                "card": {
-                    "header": {
-                        "title": {
-                            "tag": "plain_text",
-                            "content": f"\U0001f4ca 因子交叉验证 | strong_buy/buy | {today_str}",
-                        },
-                        "template": "blue",
-                    },
-                    "elements": [
-                        {"tag": "div", "text": {"tag": "lark_md", "content": f"**验证范围：** strong_buy + buy 共 {len(buy_symbols)} 只{header_note}"}},
-                        {"tag": "hr"},
-                    ] + [
-                        {"tag": "div", "text": {"tag": "lark_md", "content": e}}
-                        for e in elements[:20]
-                    ],
-                },
-            }
-            try:
-                url = settings.get_webhook_url("rating")
-                resp = requests.post(
-                    url, data=json.dumps(payload),
-                    headers={"Content-Type": "application/json"}, timeout=10,
-                )
-                if resp.status_code == 200 and resp.json().get("code") == 0:
-                    logger.info(f"因子交叉验证推送成功: {len(elements)} 只, 双优: {len(high_quality)}")
-                else:
-                    logger.error(f"因子交叉验证推送失败: {resp.text}")
-            except Exception as exc:
-                logger.error(f"因子交叉验证推送异常: {exc}")
-
     # 导出 JSON 到 output/（供 gpfxAPP 导入）
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
@@ -978,6 +967,30 @@ def _run_factors(settings, logger, engine, top_n_str: str) -> None:
 
 
 
+def _run_verify_data(settings, logger, engine) -> None:
+    """验证 mootdx 与腾讯财经的收盘价一致性。"""
+    from sequoia_x.data.engine import DataValidator
+
+    symbols = engine.get_local_symbols()
+    logger.info(f"数据一致性验证: {len(symbols)} 只股票")
+
+    result = DataValidator.verify_prices(symbols=symbols, sample_size=min(200, len(symbols)))
+
+    sep = "=" * 60
+    print(f"\n{sep}")
+    print("  数据一致性验证结果")
+    print(sep)
+    print(f"  验证: {result['total']} 只")
+    print(f"  通过: {result['passed']} 只 ({result.get('passed_pct',0)}%)")
+    print(f"  异常: {result['failed']} 只")
+    if result['issues']:
+        print("\n  异常详情（差异>1%）:")
+        for issue in result['issues'][:10]:
+            print(f"    {issue['symbol']}: mootdx={issue['mootdx_close']} 腾讯={issue['tencent_close']} 差异={issue['diff_pct']}%")
+        if len(result['issues']) > 10:
+            print(f"    ... 共 {len(result['issues'])} 只异常")
+    print(sep)
+
 def _run_review(settings, logger, engine) -> None:
     """回溯模式：检查历史推荐命中率并推送到飞书。"""
     from sequoia_x.tracker import RecommendationTracker
@@ -1073,6 +1086,10 @@ def main() -> None:
         "--review", action="store_true",
         help="回溯模式：检查历史推荐命中率并推送报告",
     )
+    parser.add_argument(
+        "--verify-data", action="store_true",
+        help="验证数据一致性：对比 mootdx 与腾讯财经的收盘价",
+    )
     args = parser.parse_args()
 
     # 调度相关命令单独处理（无需初始化整个系统）
@@ -1115,6 +1132,10 @@ def main() -> None:
 
         if args.review:
             _run_review(settings, logger, engine)
+            return
+
+        if args.verify_data:
+            _run_verify_data(settings, logger, engine)
             return
 
         if args.parallel_backfill:

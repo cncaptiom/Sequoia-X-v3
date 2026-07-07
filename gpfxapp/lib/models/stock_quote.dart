@@ -16,7 +16,7 @@ class StockQuote {
   final double pb; // 市净率
   final double marketCap; // 总市值（亿）
   final double circulatingMarketCap; // 流通市值（亿）
-  final int volumeRatio; // 量比
+  final double volumeRatio; // 量比
   final DateTime time; // 数据时间
   final String market; // "SH"/"SZ"/"BJ" - 用于排行等场景
 
@@ -53,7 +53,7 @@ class StockQuote {
   StockQuote copyWith({
     double? pe,
     double? pb,
-    int? volumeRatio,
+    double? volumeRatio,
   }) {
     return StockQuote(
       code: code,
@@ -150,7 +150,7 @@ class StockQuote {
     final amplitude = double.tryParse(data['f152']?.toString() ?? '0') ?? 0;
     final peVal = double.tryParse(data['f52']?.toString() ?? '0') ?? 0;
     final pbVal = (double.tryParse(data['f162']?.toString() ?? '0') ?? 0) / 100;
-    final volumeRatio = double.tryParse(data['f53']?.toString() ?? '0')?.toInt() ?? 0;
+    final volumeRatio = double.tryParse(data['f53']?.toString() ?? '0') ?? 0;
     // 市值单位为万(÷10000 → 亿)
     final mCap = (double.tryParse(data['f84']?.toString() ?? '0') ?? 0) / 10000;
     final circMCap = (double.tryParse(data['f85']?.toString() ?? '0') ?? 0) / 10000;

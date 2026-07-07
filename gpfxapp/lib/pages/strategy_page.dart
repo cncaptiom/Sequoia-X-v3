@@ -365,7 +365,6 @@ class StrategyPage extends StatelessWidget {
     required Map<String, dynamic> stats,
   }) {
     final ret20 = (stats['return_20d'] as num?)?.toDouble() ?? 0;
-    final count = (stats['signal_count'] as num?)?.toInt() ?? 0;
     final insufficient = stats['insufficient_data'] as bool? ?? false;
 
     // IC 分析数据
@@ -431,8 +430,7 @@ class StrategyPage extends StatelessWidget {
       final label = (m?['label'] as String?) ?? entry.key;
       if (icAnalysis != null) {
         final meanIc = (icAnalysis['mean_ic'] as num?)?.toDouble() ?? 0;
-        final spread = ((icAnalysis['avg_quantile_returns'] as Map<String, dynamic>?)?
-            ?['spread'] as num?)?.toDouble() ?? 0;
+        final spread = ((icAnalysis['avg_quantile_returns'] as Map<String, dynamic>?)?['spread'] as num?)?.toDouble() ?? 0;
         icList.add({'name': label, 'ic': meanIc, 'spread': spread, 'key': entry.key});
       }
     }
@@ -440,7 +438,6 @@ class StrategyPage extends StatelessWidget {
 
     icList.sort((a, b) => (b['ic'] as double).compareTo(a['ic'] as double));
     final best = icList.first;
-    final worst = icList.last;
 
     // 检查是否有衰减策略
     final decayed = strategies.entries.where((e) {

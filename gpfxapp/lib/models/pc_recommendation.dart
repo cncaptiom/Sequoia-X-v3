@@ -145,6 +145,7 @@ class PcTopPick {
   final String ratingStars;
   final double totalScore;
   final double currentPrice;
+  final int consecutiveDays;
 
   PcTopPick({
     required this.symbol,
@@ -154,6 +155,7 @@ class PcTopPick {
     required this.ratingStars,
     required this.totalScore,
     required this.currentPrice,
+    this.consecutiveDays = 1,
   });
 
   factory PcTopPick.fromJson(Map<String, dynamic> json) {
@@ -165,6 +167,7 @@ class PcTopPick {
       ratingStars: json['rating_stars'] as String? ?? '★',
       totalScore: (json['total_score'] as num?)?.toDouble() ?? 0,
       currentPrice: (json['current_price'] as num?)?.toDouble() ?? 0,
+      consecutiveDays: (json['consecutive_days'] as num?)?.toInt() ?? 1,
     );
   }
 }

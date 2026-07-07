@@ -1,347 +1,143 @@
 # Sequoia-X V3
 
-> A 股量化选股系统 + 手机端实时监控 | A-Share Quantitative Stock Selection & Mobile Monitoring System
+> A 股量化选股系统 + Flutter 手机端实时监控 | A-Share Quantitative Stock Selection & Mobile Monitoring
 
-基于 [sngyai/Sequoia-X](https://github.com/sngyai/Sequoia-X) 进行大幅改造和扩展，在此感谢原作者的贡献。
+基于 [sngyai/Sequoia-X](https://github.com/sngyai/Sequoia-X) 进行大幅改造和扩展。
 
-📌 原项目 MIT 协议，本衍生项目同样遵循 MIT 协议。
+📌 MIT 协议。
 
 ---
 
-## 📱 项目简介
-
-一个完整的 A 股量化交易辅助系统，由 **PC 端（选股引擎）**和 **手机端（实时监控）** 两部分组成：
+## 系统架构
 
 ```
-PC端 (每晚21:00自动运行)
-  ┌─ 全市场5000+只股票扫描
-  ├─ 6大选股策略 + 7大评级策略
-  ├─ 按评分取前15名生成操作建议
-  ├─ 推送飞书 + 上传云端
-  └─ 手机端实时拉取数据
+PC端 (每日选股)
+  mootdx ──→ SQLite ──→ 8策略评分 ──→ ICTracker(IC检验)
+                              │              │
+                        权重融合       IC<0?自动降权
+                              │
+                         腾讯云COS ────→ 手机端拉取
+                              │
+                         飞书推送(可选)
 
-手机端 (盘中9:30-15:00)
-  ┌─ 实时显示PC端推荐股票
-  ├─ 实时行情监控 + 止损止盈检查
-  ├─ 明确的操作建议（买入/持有/卖出）
-  └─ 15秒自动刷新
+手机端 (盘中)
+  首页推荐 → 详情页决策卡 → 三类策略分析 → 技术分析详情
 ```
 
 ---
 
-## ⚙️ PC端 — 量化选股系统
+## PC端 — 量化选股
 
-### 核心架构
+### 8 大评级策略
 
-```
-mootdx(主数据源) ─→ SQLite ─→ 6策略选股 ─→ ConsensusEngine融合
-                                   ↓
-baostock(备选) ─→ 数据清洗 ←─── 7策略评级  
-                                   ↓
-                             SignalGenerator信号生成
-                                   ↓
-                     ┌──── 飞书推送(操作建议) ────┐
-                     │                            │
-                     └── 腾讯云COS ─→ 手机端拉取 ──┘
-```
+| 策略 | 类型 | 说明 | 历史IC |
+|------|------|------|--------|
+| **MaVolume** | 趋势 | MA5金叉MA20+放量1.5倍 | +0.0173 |
+| **TurtleTrade** | 趋势 | 20日新高突破 | +0.0006 |
+| **ATRChannel** | 趋势 | ATR通道突破 | -0.0003 |
+| **MACD+RSI** | 动量 | 金叉死叉+超买超卖共振 | -0.0271 |
+| **MA20/60交叉** | 动量 | 中长期均线交叉 | -0.0367 |
+| **均值回归** | 反转 | RSI超买超卖 | +0.0047 |
+| **量价关系** | 反转 | 放量上涨/缩量回调/背离 | -0.0119 |
+| **KDJ** | 反转 | KDJ金叉/超卖 | -0.0057 |
 
-### 6 大选股策略
+**评分范围**：-0.5 ~ 1.6（全市场）
+**S/A/B/C分级**：≥1.5(S) / ≥1.0(A) / ≥0.5(B) / <0.5(C)
 
-| 策略 | 类型 | 说明 |
-|------|------|------|
-| **MaVolume** | 趋势跟踪 | MA5金叉MA20 + 成交量放大1.5倍 |
-| **TurtleTrade** | 趋势突破 | 20日新高 + 成交额过亿 + 阳线确认 |
-| **HighTightFlag** | 动量 | 40日上涨60%后缩量横盘<15%的旗形整理 |
-| **LimitUpShakeout** | 反转 | 涨停次日阴线洗盘但不破昨收 |
-| **UptrendLimitDown** | 反转 | 上升趋势中跌停放量见底 |
-| **RpsBreakout** | 动量 | 120日相对强度>90% + 接近新高 |
+### IC 信号质量监控
 
-### 7 大评级策略
+每日追踪 8 策略的评分与 20 日收益的 Spearman 秩相关（IC）：
 
-| 策略 | 功能 |
-|------|------|
-| **MaVolume** | 均线金叉+放量评分 |
-| **TurtleTrade** | 趋势突破评分 |
-| **均值回归** | 布林带+RSI超买超卖 |
-| **量价关系** | 放量上涨/缩量回调/量价背离 |
-| **ATR通道** | 波动率趋势跟踪 |
-| **MACD+RSI共振** | 金叉死叉+超买超卖共振 |
-| **MA20/60金叉死叉** | 中长期趋势判定 |
+- IC 持续 20 日为负 → 自动降低该策略权重
+- 五分位数分析：验证评分排序与收益的单调性
+- IC 衰减曲线：1/5/10/20 日预测力衰减速度
 
-### 市场状态驱动权重
+### 市场状态识别
 
-不同的市场状态自动调整策略权重：
+使用价格 vs MA120 位置 + 波动率聚类（行业标准方法）：
 
-| 市场状态 | 趋势策略 | 动量策略 | 反转策略 | 建议仓位 |
-|---------|---------|---------|---------|---------|
-| 强牛 | 50% | 30% | 20% | 100% |
-| 弱牛 | 40% | 35% | 25% | 70% |
-| 震荡 | 20% | 25% | 55% | 50% |
-| 弱熊 | 10% | 30% | 60% | 30% |
-| 强熊 | 0% | 10% | 90% | 15% |
+| 判定条件 | 状态 | 建议仓位 |
+|---------|------|---------|
+| 价格 > MA120×1.05 + 趋势强 | 强牛 | 100% |
+| 价格 > MA120×1.05 | 弱牛 | 70% |
+| 价格在 MA120±5% | 震荡 | 50% |
+| 价格 < MA120×0.95 | 弱熊 | 30% |
+| 价格 < MA120×0.95 + 趋势弱 | 强熊 | 15% |
 
-### 置信度评分（7 维度）
+### 策略权重
 
-| 维度 | 权重 | 说明 |
-|------|------|------|
-| 多策略共振 | 0.25 | ≥3个策略选中加分 |
-| 趋势强度 | 0.20 | 均线多头排列 |
-| 量价配合 | 0.15 | 放量上涨或缩量回调 |
-| 安全边际 | 0.15 | 接近支撑位 |
-| 低波动环境 | 0.10 | 20日波动率<3% |
-| 量价共振 | 0.10 | 放量+多头趋势同时满足 |
-| 资金流向 | 0.05 | 北向资金增持 |
+所有策略**等权分配**（每策略约12.5%），不根据市场状态调整。原因：缺乏足够数据支撑不同市场状态下策略收益有显著差异。
 
-附加修正：周线趋势过滤（±0.10）、市场状态修正（±0.08）、风险控制修正（±0.13）
+### 持仓风控
 
-置信度等级：
-- **S** (≥0.75)：强烈推荐，多策略共振+趋势强
-- **A** (≥0.60)：推荐，多策略确认
-- **B** (≥0.45)：关注，个别策略触发
-- **C** (≥0.25)：观察，信号偏弱
-- **D** (<0.25)：不参与
+- ATR 动态止损计算
+- Kelly 公式仓位优化（1/4 Kelly）
+- 单票止损 -8%，止盈 +20%
+- 建议仓位联动市场状态
 
-### 风险管理
+### 回测验证
 
-- ATR 动态仓位计算（海龟交易法）
-- Kelly 公式仓位优化
-- VaR/CVaR 风险评估
-- 单票仓位上限 15%
-- 止损/止盈自动计算
+- 滑动窗口回测引擎（防未来信息泄漏）
+- 信号触发收益 vs 评分五分位数双通道分析
+- 数据一致性校验（`--verify-data` 命令）
 
----
-
-## 📱 手机端 — 实时监控APP
-
-### 技术栈
-
-Flutter / Provider / Dio / Hive / fl_chart
-
-### 功能列表
-
-| 页面 | 功能 |
-|------|------|
-| **首页** | 大盘指数 + PC端推荐股票（含操作信号/买入区间/止损止盈） + 自选股 |
-| **详情页** | 实时行情 + 实时操盘建议（BUY/WAIT/HOLD） + PC端评级 + K线 + 策略评分 |
-| **搜索页** | 股票搜索 + 排行榜（涨幅/跌幅/成交额） + 行业板块 |
-| **策略页** | 市场状态显示 + 操盘风格选择 + 策略开关 |
-| **设置页** | PC数据同步状态 + 通知管理 + 效果跟踪 |
-
-### 实时操盘建议
-
-根据 PC 端每晚计算的买入区间 vs 盘中实时价格，自动判断：
-
-```
-当前价 < 买入区间 → 观望/关注
-当前价在买入区间内 → 买入（红色大字）
-当前价 > 买入区间 → 等回调/轻仓
-已持仓 → 持有/警戒/止损/止盈
-```
-
-每种状态包含三种执行路径：
-- **激进** — 快速入场/出场，适合牛市
-- **保守** — 等回调/确认，保本优先
-- **信号** — 等MACD+放量确认，最安全
-
----
-
-## 🚀 快速开始（PC端）
-
-### 环境要求
-
-- Python >= 3.10
-- Windows/Linux/macOS
-
-### 1. 安装
-
-```bash
-git clone https://github.com/cncaptiom/Sequoia-X-v3.git
-cd Sequoia-X-v3
-pip install .
-pip install ".[factors]"  # 如果需要基本面因子（可选）
-```
-
-### 2. 配置
-
-```bash
-cp .env.example .env
-# 编辑 .env，填入飞书 Webhook URL 和腾讯云 COS 配置（可选）
-```
-
-### 3. 回填历史数据
-
-```bash
-# 推荐（约3-5分钟，TCP协议更稳定）
-python main.py --mootdx-backfill
-
-# 或使用并行回填（约3-4分钟）
-python main.py --parallel-backfill
-```
-
-### 4. 运行
-
-```bash
-# 全市场扫描 + 评级 + 推送（推荐）
-python main.py --rating
-
-# 或日常模式（增量更新 + 选股 + 推送）
-python main.py
-```
-
-### 5. 查看市场状态
-
-```bash
-python main.py --regime
-# 输出: 当前市场状态、建议仓位、趋势强度
-```
-
-### 6. 策略回测
-
-```bash
-python main.py --backtest
-```
-
-### 7. 安装定时任务（Windows）
-
-```bash
-python main.py --install-schedule
-# 每日21:00自动运行日常模式
-```
-
-### 所有命令
+### 操作命令
 
 | 命令 | 功能 |
 |------|------|
-| `python main.py` | 日常模式：增量更新+选股+推送 |
-| `python main.py --rating` | 评级模式：全市场7策略评分+操作建议 |
-| `python main.py --mootdx-backfill` | mootdx回填全市场历史数据 |
-| `python main.py --backfill` | 串行回填（baostock） |
-| `python main.py --parallel-backfill` | 并行回填（baostock） |
-| `python main.py --backtest` | 全策略回测 |
+| `python main.py --rating` | 全市场8策略评分 + COS上传 + 飞书推送 |
 | `python main.py --regime` | 市场状态检测 |
+| `python main.py --mootdx-backfill` | 回填全市场历史K线 |
+| `python main.py --parallel-backfill` | 并行回填（8进程） |
+| `python main.py --verify-data` | 验证 mootdx vs 腾讯财经数据一致性 |
+| `python main.py --backtest` | 全策略回测 |
 | `python main.py --factors TOP20` | 多因子选股 |
-| `python main.py --review` | 推荐命中率回溯 |
-| `python main.py --install-schedule` | 安装Windows定时任务 |
-| `python main.py --remove-schedule` | 卸载定时任务 |
+| `python main.py --install-schedule` | 安装每日21:00定时任务 |
+| `python run_strategy_backtest.py` | 信号质量回测（含IC/五分位数分析） |
 
 ---
 
-## 🚀 快速开始（手机端）
+## 手机端 — Flutter APP
 
-### 环境要求
+### 功能
 
-- Flutter SDK >= 3.0
-- Android Studio / Xcode
+| 页面 | 内容 |
+|------|------|
+| **首页** | 大盘指数 + PC推荐（S/A/B/C分级+持续天数+数据新鲜度） + 自选股 |
+| **详情页** | 综合决策卡（评级+操盘+止损止盈）→ K线 → 三类策略分析 → 技术分析详情 → 条件单建议 |
+| **搜索页** | 股票搜索 + 排行榜 |
+| **策略页** | 市场状态 + 策略回测数据（含IC/IR/价差） |
+| **设置页** | 数据源管理 + 通知设置 |
+
+### 综合决策卡
+
+根据 **评分 + 市场状态 + 价格位置** 综合判断：
+
+- 强牛/弱牛 + score≥1.0 + 价在区间 → **建仓**（红）
+- 震荡 + score≥0.5 + 价在区间 → **关注**（橙）
+- 弱熊/强熊 → 最高 **等待**（灰）
+- 已持仓 → 止损/止盈/警戒/持有
 
 ### 构建
 
 ```bash
 cd gpfxapp/
 flutter pub get
-flutter build apk --debug   # Android
-# 或
-flutter build ios           # iOS
+flutter build apk --debug
 ```
 
-APK 生成在 `gpfxapp/build/app/outputs/flutter-apk/app-debug.apk`
-
-**手机端依赖 PC 端**：PC端需配置好腾讯云 COS 并成功运行 `--rating` 模式，
-手机端才能拉取到选股数据。
+手机端依赖 PC 端：需配置腾讯云 COS 并成功运行 `--rating`。
 
 ---
 
-## 🏗️ 目录结构
+## 致谢
 
-```
-Sequoia-X-v3/
-├── main.py                 # PC端入口
-├── pyproject.toml          # Python 依赖
-├── .env.example            # 环境变量模板
-│
-├── sequoia_x/              # PC端核心代码
-│   ├── core/               # 配置 + 日志
-│   ├── data/               # 数据引擎（mootdx/baostock + SQLite）
-│   ├── strategy/           # 6个选股策略
-│   ├── rating/             # 7个评级策略
-│   ├── signal/             # 交易信号生成
-│   ├── recommender/        # 飞书报告生成
-│   ├── ensemble/           # 多策略融合评分
-│   ├── regime/             # 市场状态识别
-│   ├── risk/               # 风险管理（ATR/Kelly/VaR）
-│   ├── factors/            # 多因子模型（Fama-French）
-│   ├── flow/               # 资金流向分析
-│   ├── backtest/           # 回测引擎
-│   ├── analysis/           # 技术分析
-│   ├── notify/             # 飞书通知
-│   ├── tracker/            # 推荐追踪
-│   └── cloud/              # 腾讯云COS同步
-│
-├── gpfxapp/                # 手机端 Flutter APP
-│   ├── lib/
-│   │   ├── models/         # 数据模型
-│   │   ├── pages/          # 页面（首页/详情/搜索/策略/设置）
-│   │   ├── providers/      # 状态管理
-│   │   ├── services/       # API服务
-│   │   └── widgets/        # UI组件
-│   └── pubspec.yaml
-│
-├── tests/                  # 测试用例
-├── data/                   # 数据目录
-└── output/                 # 输出目录
-```
+- [sngyai/Sequoia-X](https://github.com/sngyai/Sequoia-X) — 原始项目
+- mootdx / baostock — A股行情数据源
+- Microsoft Qlib — IC 分析参考
 
----
+## 声明
 
-## 📊 数据流架构
-
-```
-                        PC端（每晚21:00）
-                         
-mootdx ──→ baostock(备)
-    │
-    ▼
-SQLite ──→ DataValidator ──→ 6策略并行选股
-    │                           │
-    │                     ConsensusEngine评分
-    │                           │
-    │                     7策略评级扫描
-    │                           │
-    │                    SignalGenerator信号
-    │                           │
-    │              ┌────────────┴────────────┐
-    │              │                         │
-    │         飞书推送                   腾讯云COS
-    │      （操作建议卡片）          （全量数据上传）
-    │                                         │
-    │                                         ▼
-    │                                    手机端拉取
-    │                                    （每日启动时）
-    │                                         │
-    │                              ┌──────────┴──────────┐
-    │                              │                     │
-    │                         首页推荐列表           详情页数据
-    │                         （10只）           （评级+买入区间）
-    │                              │                     │
-    │                         盘中实时行情 ──── 实时操盘建议
-    │                         （15秒轮询）     （BUY/HOLD/SELL）
-    │
-    └─── 推荐记录存入 SQLite ───→ 7天后 --review 回溯
-```
-
----
-
-## 📝 致谢
-
-- 本项目基于 [sngyai/Sequoia-X](https://github.com/sngyai/Sequoia-X) 改造扩展
-- 框架参考 [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) 多智能体决策流程
-- 基本面研究参考 [muxuuu/serenity-skill](https://github.com/muxuuu/serenity-skill) 供应链瓶颈方法论
-- 数据源感谢 [mootdx](https://github.com/mootdx/mootdx)、[baostock](http://baostock.com)、[akshare](https://github.com/akfamily/akshare)
-
----
-
-## ⚠️ 声明
-
-**本系统所有分析结果仅供参考，不构成投资建议。**
-股市有风险，投资需谨慎。历史回测表现不代表未来结果。
+**本系统所有分析结果仅供参考，不构成投资建议。** 股市有风险，投资需谨慎。
 
 MIT License

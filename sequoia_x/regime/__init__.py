@@ -56,16 +56,13 @@ REGIME_EXPOSURE = {
 
 # 各状态下的策略类型权重偏向
 REGIME_STRATEGY_BIAS = {
-    # strong_bull: 趋势策略优先
-    MarketRegime.STRONG_BULL: {"trend": 0.50, "momentum": 0.30, "reversal": 0.20},
-    # weak_bull: 趋势为主，加一些反转
-    MarketRegime.WEAK_BULL: {"trend": 0.40, "momentum": 0.35, "reversal": 0.25},
-    # range: 均值回归优先
-    MarketRegime.RANGE: {"trend": 0.20, "momentum": 0.25, "reversal": 0.55},
-    # weak_bear: 防守为主
-    MarketRegime.WEAK_BEAR: {"trend": 0.10, "momentum": 0.30, "reversal": 0.60},
-    # strong_bear: 几乎不做多
-    MarketRegime.STRONG_BEAR: {"trend": 0.00, "momentum": 0.10, "reversal": 0.90},
+    # 所有市场状态统一等权分配
+    # 原因：缺乏足够数据支撑不同状态下策略收益有显著差异
+    MarketRegime.STRONG_BULL: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+    MarketRegime.WEAK_BULL: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+    MarketRegime.RANGE: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+    MarketRegime.WEAK_BEAR: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+    MarketRegime.STRONG_BEAR: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
 }
 
 
@@ -160,34 +157,34 @@ class RegimeDetector:
             vol_regime = "normal"
 
         # ── 判断市场状态 ──
+        # 行业标准方法：价格 vs 长期均线(MA120)位置 + 趋势强度
         details_parts = []
 
-        # 1. 均线排列判断
-        if ma5 > ma20 > ma60 > ma120 and last_close > ma5:
+        # 1. 价格相对 MA120 的位置（趋势方向）
+        if last_close > ma120 * 1.05:  # 价格在 MA120 上方超过5%
             if trend_strength > 0.3:
                 regime = MarketRegime.STRONG_BULL
-            else:
+            elif trend_strength > 0:
                 regime = MarketRegime.WEAK_BULL
-        elif ma5 < ma20 < ma60 < ma120 and last_close < ma5:
+            else:
+                regime = MarketRegime.WEAK_BULL  # 上穿但动能不足，仍为弱牛
+        elif last_close < ma120 * 0.95:  # 价格在 MA120 下方超过5%
             if trend_strength < -0.3:
                 regime = MarketRegime.STRONG_BEAR
-            else:
+            elif trend_strength < 0:
                 regime = MarketRegime.WEAK_BEAR
+            else:
+                regime = MarketRegime.WEAK_BEAR  # 下穿但有反弹，仍为弱熊
         else:
-            # 非完美排列时，看价格相对 MA60 的位置
-            if last_close > ma60 and ma20 > ma60:
-                regime = MarketRegime.WEAK_BULL
-            elif last_close < ma60 and ma20 < ma60:
-                regime = MarketRegime.WEAK_BEAR
-            else:
-                regime = MarketRegime.RANGE
+            # 价格在 MA120 附近 ±5% → 震荡
+            regime = MarketRegime.RANGE
 
         # 2. 波动率修正：高波环境向保守调整
-        if vol_regime == "high" and regime in (MarketRegime.STRONG_BULL, MarketRegime.WEAK_BULL):
-            # 高波牛市中适当降低暴露，但保持偏多
-            pass
-        elif vol_regime == "high" and regime == MarketRegime.RANGE:
-            regime = MarketRegime.WEAK_BEAR  # 高波震荡视为偏熊
+        if vol_regime == "high":
+            if regime in (MarketRegime.STRONG_BULL, MarketRegime.WEAK_BULL):
+                regime = MarketRegime.WEAK_BULL  # 高波牛降为弱牛
+            elif regime == MarketRegime.RANGE:
+                regime = MarketRegime.WEAK_BEAR  # 高波震荡视为偏熊
 
         suggested_exposure = REGIME_EXPOSURE.get(regime, 0.5)
         if vol_regime == "high":
@@ -196,7 +193,8 @@ class RegimeDetector:
             suggested_exposure = min(suggested_exposure * 1.2, 1.0)
 
         # ── 生成描述 ──
-        details_parts.append(f"MA5={ma5:.0f} MA20={ma20:.0f} MA60={ma60:.0f}")
+        pct_diff = (last_close / ma120 - 1) * 100
+        details_parts.append(f"价格vsMA120={pct_diff:+.1f}%")
         details_parts.append(f"趋势强度={trend_strength:.2f}")
         details_parts.append(f"波动率={current_vol:.4f}({vol_regime}, P{vol_percentile:.0%})")
 
