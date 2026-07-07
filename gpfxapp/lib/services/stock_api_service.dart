@@ -166,7 +166,7 @@ class StockApiService {
       if (data == null) return quote;
 
       final pe = double.tryParse(data['f52']?.toString() ?? '0') ?? 0;
-      final volumeRatio = double.tryParse(data['f53']?.toString() ?? '0')?.toInt() ?? 0;
+      final volumeRatio = double.tryParse(data['f53']?.toString() ?? '0') ?? 0;
       final pb = (double.tryParse(data['f162']?.toString() ?? '0') ?? 0) / 100;
 
       return quote.copyWith(

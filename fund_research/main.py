@@ -231,7 +231,7 @@ def _run_fund_satellite(args):
     from fund_research.analysis.screener import FundScreener
 
     screener = FundScreener()
-    funds = screener.screen_satellite(top_n=args.top_n if args.top_n else 5)
+    funds = screener.screen_satellite(top_n=args.top_n if args.top_n < 20 else 5)
     screener.print_satellite_result(funds)
 
 

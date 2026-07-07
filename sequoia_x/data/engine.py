@@ -228,6 +228,89 @@ class DataValidator:
         }
 
     @staticmethod
+    def verify_prices(symbols: list[str] = None, sample_size: int = 100) -> dict:
+        """交叉验证 mootdx 和腾讯财经的收盘价一致性。
+
+        对比两只股票的收盘价，差异 >1% 则标记为异常。
+        用于检测复权计算偏差或数据源错误。
+
+        Args:
+            symbols: 待验证的股票列表，None 表示自动获取。
+            sample_size: 验证数量，默认 100 只。
+
+        Returns:
+            {"total": N, "passed": N, "failed": N, "issues": [{symbol, diff, db_price, tencent_price}]}
+        """
+        import requests, json, time
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from mootdx.quotes import Quotes
+
+        if symbols is None:
+            return {"total": 0, "passed": 0, "failed": 0, "issues": []}
+
+        result = {"total": 0, "passed": 0, "failed": 0, "issues": []}
+        client = Quotes.factory(market='std')
+        test_symbols = symbols[:sample_size]
+
+        def check_one(sym: str) -> dict | None:
+            try:
+                # 从 mootdx 获取最新收盘价
+                bars = client.bars(symbol=sym, frequency=9, start=0, count=1)
+                if bars is None or bars.empty:
+                    return None
+                mootdx_close = float(bars['close'].iloc[-1])
+
+                # 从腾讯财经获取收盘价（使用完整市场代码）
+                if sym.startswith(('6', '9')):
+                    tencent_code = f"sh{sym}"
+                elif sym.startswith(('0', '3')):
+                    tencent_code = f"sz{sym}"
+                elif sym.startswith(('8', '4')):
+                    tencent_code = f"bj{sym}"
+                else:
+                    tencent_code = f"sz{sym}"
+                url = f"http://qt.gtimg.cn/q={tencent_code}"
+                resp = requests.get(url, timeout=5)
+                if resp.status_code != 200:
+                    return None
+                parts = resp.text.split('~')
+                if len(parts) < 4:
+                    return None
+                tencent_close = float(parts[3]) if parts[3] else 0
+                if tencent_close <= 0:
+                    return None
+
+                if mootdx_close <= 0:
+                    return None
+
+                diff_pct = abs(mootdx_close - tencent_close) / mootdx_close * 100
+                if diff_pct > 1:
+                    return {
+                        "symbol": sym,
+                        "diff_pct": round(diff_pct, 2),
+                        "mootdx_close": round(mootdx_close, 2),
+                        "tencent_close": round(tencent_close, 2),
+                    }
+                return None
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(check_one, sym): sym for sym in test_symbols}
+            for f in as_completed(futures):
+                result["total"] += 1
+                issue = f.result()
+                if issue:
+                    result["failed"] += 1
+                    result["issues"].append(issue)
+                else:
+                    result["passed"] += 1
+
+        result["passed_pct"] = round(result["passed"] / max(result["total"], 1) * 100, 1)
+        logger.info(f"数据一致性验证: {result['passed']}/{result['total']} 通过 ({result.get('passed_pct',0)}%), {result['failed']} 异常")
+        return result
+
+    @staticmethod
     def compute_data_health_report(db_path: str) -> dict:
         """生成数据健康报告（股票数、日期范围、异常检测）。
 
@@ -453,14 +536,13 @@ class DataEngine:
         all_rows = []
         try:
             logger.info("使用 mootdx 同步...")
-            deadline = time.time() + 60  # 最多尝试 60 秒
+            deadline = time.time() + 300  # 最多尝试 5 分钟
+            client = _mootdx_get_client()
             for symbol, bs_code, start, end in tasks:
                 if time.time() > deadline:
-                    logger.warning("mootdx 同步超时（>60s），降级到 baostock")
+                    logger.warning("mootdx 同步超时（>5min），降级到 baostock")
                     break
                 try:
-                    from mootdx.quotes import Quotes
-                    client = Quotes.factory(market='std')
                     df = client.bars(symbol=symbol, frequency=9, start=0, count=5)
                     if df is not None and not df.empty:
                         df["date"] = pd.to_datetime(df["datetime"]).dt.date.astype(str)

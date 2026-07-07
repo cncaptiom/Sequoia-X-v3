@@ -85,24 +85,32 @@ class ICTracker:
             self._pending[date_str] = scores_by_symbol
             self.save()
 
-    # ── N 日 IC 计算 ──
+    # ── N 日 IC 计算（交易日） ──
+
+    NEEDED_PERIODS = [5, 20]  # 需要计算的 lookforward 天数
 
     def eval_forward_returns(self, engine,
                              lookforward_days: int = 5,
                              batch_size: int = 200):
-        """对 pending 快照计算 forward IC。
+        """对 pending 快照计算 forward IC（使用交易日而非日历日）。
 
-        遍历所有待评估快照，如果日期距今 >= lookforward_days 天，
-        则从 engine 取股票数据计算 N 日收益率，再计算 IC。
+        非破坏性：快照在所有 NEEDED_PERIODS 都计算后才移除。
+        交易日查找：基于已评估股票的实际交易数据。
 
         Args:
-            engine: DataEngine（用于获取 OHLCV）
-            lookforward_days: N 日收益率
+            engine: DataEngine
+            lookforward_days: N 个交易日后的收益率
             batch_size: 每次批量取多少只股票
         """
         today = date.today()
         from sequoia_x.core.logger import get_logger
         log = get_logger("ICTracker")
+
+        # 已评估记录: {date_str: {lookforward: True}}
+        evaluated: dict[str, dict[int, bool]] = {}
+        self._eval_record = getattr(self, "_eval_record", evaluated)
+        if not hasattr(self, "_eval_record") or self._eval_record is None:
+            self._eval_record = {}
 
         # 确定哪些 pending 快照可评估
         evaluable = []
@@ -111,20 +119,42 @@ class ICTracker:
                 d = date.fromisoformat(d_str)
             except ValueError:
                 continue
-            if (today - d).days >= lookforward_days:
-                evaluable.append(d_str)
+            if (today - d).days >= lookforward_days * 1.5:  # 宽松检查
+                # 检查是否已算过此 lookforward
+                rec = self._eval_record.setdefault(d_str, {})
+                if not rec.get(lookforward_days, False):
+                    evaluable.append(d_str)
 
         if not evaluable:
             return
 
         for d_str in evaluable:
-            scores_by_symbol = self._pending.pop(d_str)
-            target_date = date.fromisoformat(d_str) + timedelta(days=lookforward_days)
-            target_str = target_date.strftime("%Y-%m-%d")
+            scores_by_symbol = self._pending[d_str]
+            log.info(f"IC计算 [{d_str}] lookforward={lookforward_days}d, "
+                     f"股票数={len(scores_by_symbol)}")
 
             symbols = list(scores_by_symbol.keys())
             if not symbols:
                 continue
+
+            # 用第一个有数据的股票构建交易日历
+            trade_dates: list[str] = []
+            for sym in symbols[:10]:
+                df = engine.get_ohlcv(sym)
+                if df is not None and not df.empty:
+                    trade_dates = sorted(df[df["date"] >= d_str]["date"].tolist())
+                    break
+            if not trade_dates:
+                continue
+
+            try:
+                d_idx = trade_dates.index(d_str)
+            except ValueError:
+                continue
+            fwd_idx = d_idx + lookforward_days
+            if fwd_idx >= len(trade_dates):
+                continue
+            target_str = trade_dates[fwd_idx]
 
             # 批量加载 OHLCV 数据
             ohlcv_map = engine.get_bulk_ohlcv(symbols)
@@ -139,13 +169,11 @@ class ICTracker:
                 if df is None or df.empty:
                     continue
 
-                # 起始价格（评分日的close，取 <= d_str 的最新一条）
                 start_rows = df[df["date"] <= d_str]
                 if start_rows.empty:
                     continue
                 start_price = float(start_rows["close"].iloc[-1])
 
-                # 目标价格（N 日后的 close，取 <= target_str 的最新一条）
                 end_rows = df[df["date"] <= target_str]
                 if end_rows.empty:
                     continue
@@ -174,7 +202,6 @@ class ICTracker:
                 ret_arr = [rets[sym] for sym in sym_list]
                 ic, p_val = _rank_ic(score_arr, ret_arr)
 
-                # 五分位数收益
                 sorted_pairs = sorted(zip(score_arr, ret_arr), key=lambda x: x[0])
                 n = len(sorted_pairs)
                 k = max(n // 5, 1)
@@ -196,8 +223,19 @@ class ICTracker:
                 }
                 self.history[s].append(entry)
 
-            log.info(f"IC计算完成 [{d_str}] lookforward={lookforward_days}d: "
-                     f"{len(evaluable)}个日期")
+            # 标记此 lookforward 已计算
+            self._eval_record[d_str][lookforward_days] = True
+
+            # 所有 NEEDED_PERIODS 都算完了才移除快照
+            all_done = all(
+                self._eval_record[d_str].get(f, False)
+                for f in self.NEEDED_PERIODS
+            )
+            if all_done:
+                self._pending.pop(d_str, None)
+                self._eval_record.pop(d_str, None)
+
+            log.info(f"IC计算完成 [{d_str}] lookforward={lookforward_days}d")
 
         self.save()
 

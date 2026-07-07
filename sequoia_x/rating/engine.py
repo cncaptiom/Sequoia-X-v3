@@ -26,6 +26,9 @@ from sequoia_x.rating.strategies import (
     turtle_trade_strategy,
     volume_price_strategy,
 )
+from sequoia_x.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ── 配置 ──
@@ -66,17 +69,15 @@ class RatingConfig:
 
     trend_filter_enabled: bool = True
 
-    # 默认权重（基于近3年300只股票回测数据优化）
-    # 排序：mean_reversion(1.81%) > ma_volume(1.09%) > volume_price(1.32%) > atr_channel(1.13%)
-    #        > ma_cross(1.09%) > macd_rsi(1.01%) > turtle_trade(0.93%)   权重参考
-    weight_ma_volume: float = 0.18
-    weight_turtle_trade: float = 0.05
-    weight_mean_reversion: float = 0.20
-    weight_volume_price: float = 0.15
-    weight_atr_channel: float = 0.12
-    weight_macd_rsi: float = 0.09
-    weight_ma_cross: float = 0.11
-    weight_kdj: float = 0.06
+    # 默认权重（等权分配，不根据市场状态调整）
+    weight_ma_volume: float = 0.125
+    weight_turtle_trade: float = 0.125
+    weight_mean_reversion: float = 0.125
+    weight_volume_price: float = 0.125
+    weight_atr_channel: float = 0.125
+    weight_macd_rsi: float = 0.125
+    weight_ma_cross: float = 0.125
+    weight_kdj: float = 0.125
 
     # ── 策略类别与市场状态权重映射 ──
     # 各策略所属类别
@@ -102,11 +103,13 @@ class RatingConfig:
     # 震荡: 三类接近，reversal略优
     # 弱熊/强熊: 全部亏损，reversal损失最小
     REGIME_BIAS = {
-        "强牛": {"trend": 0.43, "momentum": 0.22, "reversal": 0.35},
-        "弱牛": {"trend": 0.15, "momentum": 0.30, "reversal": 0.55},
-        "震荡": {"trend": 0.32, "momentum": 0.30, "reversal": 0.38},
-        "弱熊": {"trend": 0.15, "momentum": 0.35, "reversal": 0.50},
-        "强熊": {"trend": 0.05, "momentum": 0.20, "reversal": 0.75},
+        # 所有市场状态统一等权分配，不根据状态调整
+        # 原因：缺乏足够数据支撑不同状态下策略收益有显著差异
+        "强牛": {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+        "弱牛": {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+        "震荡": {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+        "弱熊": {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+        "强熊": {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
     }
 
     def apply_regime(self, regime_label: str) -> None:
@@ -180,10 +183,10 @@ class Rating:
     avoid = "avoid"
 
     LABELS = {
-        strong_buy: "强烈买入",
-        buy: "买入",
-        watch: "观望",
-        attention: "关注",
+        strong_buy: "S级",
+        buy: "A级",
+        watch: "B级",
+        attention: "C级",
         avoid: "回避",
     }
 
@@ -435,15 +438,19 @@ class RatingEngine:
 
     @staticmethod
     def _calculate_rating(trend_passed: bool, score: float, risk_reward: float) -> str:
+        """计算评级。阈值对齐全市场评分分布：
+           S/strong_buy ≥1.5(前0.2%), A/buy ≥1.0(前7%), B/watch ≥0.5(前28%)。"""
         if not trend_passed:
             return Rating.avoid
-        if score >= 6 and risk_reward > 3:
+        if score >= 1.5:
             return Rating.strong_buy
-        if score >= 4 and risk_reward > 2:
+        if score >= 1.0:
             return Rating.buy
-        if score >= 2:
+        if score >= 0.5:
             return Rating.watch
-        return Rating.attention
+        if score >= 0:
+            return Rating.attention
+        return Rating.avoid
 
     def scan_market(
         self,

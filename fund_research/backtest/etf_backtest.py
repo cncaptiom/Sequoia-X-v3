@@ -158,7 +158,7 @@ class EtfRotationBacktest:
                         price = self._get_price(data_view, code, date_str)
                         if price is None or price <= 0:
                             continue
-                        buy_value = min(cash_per_etf, capital * 0.99)
+                        buy_value = cash_per_etf
                         shares = int(buy_value / price / 100) * 100
                         if shares < 100:
                             continue

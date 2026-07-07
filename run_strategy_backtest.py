@@ -70,13 +70,14 @@ def _rank_ic(scores: list[float], returns: list[float]) -> tuple[float, float]:
 
 def _calc_quantile_returns(scores: list[float], returns: list[float],
                            n_quantiles: int = 5) -> dict:
-    """计算五分位数收益。"""
+    """计算五分位数收益（用 rank 打破平局，避免 pd.qcut 边界问题）。"""
     arr = np.column_stack([scores, returns])
     arr = arr[~np.isnan(arr[:, 1])]
     if len(arr) < n_quantiles:
         return {}
-    # 按评分排序后分五组
-    arr = arr[arr[:, 0].argsort()]
+    # 按 rank 排序后分五组（用 argsort 替代 qcut，处理并列）
+    idx = np.argsort(arr[:, 0])
+    arr = arr[idx]
     k = len(arr) // n_quantiles
     quantiles = {}
     for qi in range(n_quantiles):
@@ -165,8 +166,6 @@ def main():
     date_scores: dict[str, dict[str, dict[str, float]]] = {}
     # date_str → {symbol → price_at_date}
     date_prices: dict[str, dict[str, float]] = {}
-    all_date_set = set(all_dates)
-
     for si, sym in enumerate(sampled):
         if (si + 1) % 50 == 0:
             print(f"  评分矩阵进度: {si+1}/{len(sampled)}", flush=True)
@@ -198,7 +197,7 @@ def main():
                 except Exception:
                     continue
 
-    print(f"  评分矩阵完成: {len(date_scores)} 个日期", flush=True)
+    print("  评分矩阵完成", flush=True)
 
     # 计算 IC
     ic_data: dict[str, dict] = {}
