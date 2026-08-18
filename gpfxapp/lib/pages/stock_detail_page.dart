@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
@@ -38,8 +38,10 @@ class StockDetailPage extends StatelessWidget {
               // 获取股票市场信息
               final stockInfo = stockProvider.currentStock;
               final market = stockInfo?.market ?? 'SH';
-              final stock = StockInfo(code: quote.code, name: quote.name, market: market);
-              final isWatch = watchlistProvider.watchlist.any((s) => s.code == quote.code);
+              final stock =
+                  StockInfo(code: quote.code, name: quote.name, market: market);
+              final isWatch =
+                  watchlistProvider.watchlist.any((s) => s.code == quote.code);
               final isHeld = watchlistProvider.isHeld(quote.code);
 
               return Row(
@@ -66,7 +68,9 @@ class StockDetailPage extends StatelessWidget {
                   if (isWatch)
                     IconButton(
                       icon: Icon(
-                        isHeld ? Icons.shopping_bag : Icons.shopping_bag_outlined,
+                        isHeld
+                            ? Icons.shopping_bag
+                            : Icons.shopping_bag_outlined,
                         color: isHeld ? AppTheme.signalBuy : Colors.grey,
                       ),
                       tooltip: isHeld ? '标记为已卖出' : '标记为已买入（15秒自动刷新+止损止盈通知）',
@@ -96,10 +100,14 @@ class StockDetailPage extends StatelessWidget {
                     icon: const Icon(Icons.copy, size: 20),
                     tooltip: '复制股票代码',
                     onPressed: () {
-                      final code = provider.currentStock?.code ?? provider.currentQuote?.code ?? '';
+                      final code = provider.currentStock?.code ??
+                          provider.currentQuote?.code ??
+                          '';
                       Clipboard.setData(ClipboardData(text: code));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('已复制代码 $code'), duration: Duration(seconds: 1)),
+                        SnackBar(
+                            content: Text('已复制代码 $code'),
+                            duration: Duration(seconds: 1)),
                       );
                     },
                   ),
@@ -131,9 +139,12 @@ class StockDetailPage extends StatelessWidget {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.search_off, size: 48, color: AppTheme.textHint.withOpacity(0.5)),
+                        Icon(Icons.search_off,
+                            size: 48,
+                            color: AppTheme.textHint.withOpacity(0.5)),
                         const SizedBox(height: 12),
-                        const Text('点击自选股或搜索选择股票查看详情', style: TextStyle(color: AppTheme.textSecondary)),
+                        const Text('点击自选股或搜索选择股票查看详情',
+                            style: TextStyle(color: AppTheme.textSecondary)),
                       ],
                     ),
                   );
@@ -143,13 +154,19 @@ class StockDetailPage extends StatelessWidget {
                   children: [
                     const Row(
                       children: [
-                        Icon(Icons.computer, color: AppTheme.primaryDark, size: 20),
+                        Icon(Icons.computer,
+                            color: AppTheme.primaryDark, size: 20),
                         SizedBox(width: 6),
-                        Text('PC端推荐股票', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                        Text('PC端推荐股票',
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.textPrimary)),
                       ],
                     ),
                     const SizedBox(height: 8),
-                    ...picks.map((pick) => _buildQuickAccessCard(context, pick, pcProvider)),
+                    ...picks.map((pick) =>
+                        _buildQuickAccessCard(context, pick, pcProvider)),
                   ],
                 );
               },
@@ -185,21 +202,26 @@ class StockDetailPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
 
-
-
-                // 4. 不同策略分析
+                // 4. 不同策略分析（PC 标准化评分优先，与决策卡一致）
                 if (analysis != null)
                   Consumer<PcDataProvider>(
                     builder: (context, pcProvider, _) {
-                      return _buildCategoryStrip(analysis, marketRegime: pcProvider.marketRegimeLabel);
+                      final code4 = provider.currentQuote?.code ?? '';
+                      final pcRating4 = pcProvider.getRating(code4);
+                      final overridden4 = pcRating4 != null
+                          ? _mergeWithPcData(analysis, pcRating4)
+                          : analysis;
+                      return _buildCategoryStrip(overridden4,
+                          marketRegime: pcProvider.marketRegimeLabel);
                     },
                   ),
                 const SizedBox(height: 8),
 
                 // 5. K线图
-                if (provider.klineData.isNotEmpty)
-                  const KLineChart(),
-                if (provider.klineData.isEmpty && !provider.isLoading && provider.currentQuote != null)
+                if (provider.klineData.isNotEmpty) const KLineChart(),
+                if (provider.klineData.isEmpty &&
+                    !provider.isLoading &&
+                    provider.currentQuote != null)
                   _buildKLineLoadingCard(),
                 const SizedBox(height: 8),
 
@@ -209,7 +231,9 @@ class StockDetailPage extends StatelessWidget {
                     if (analysis == null) return const SizedBox.shrink();
                     final code2 = provider.currentQuote?.code ?? '';
                     final pcRating2 = pcProvider2.getRating(code2);
-                    final overridden = pcRating2 != null ? _mergeWithPcData(analysis, pcRating2) : analysis;
+                    final overridden = pcRating2 != null
+                        ? _mergeWithPcData(analysis, pcRating2)
+                        : analysis;
                     return Column(
                       children: [
                         AnalysisSection(analysis: overridden),
@@ -230,7 +254,9 @@ class StockDetailPage extends StatelessWidget {
                     if (analysis == null) return const SizedBox.shrink();
                     final code3 = provider.currentQuote?.code ?? '';
                     final pcRating3 = pcProvider3.getRating(code3);
-                    final overridden = pcRating3 != null ? _mergeWithPcData(analysis, pcRating3) : analysis;
+                    final overridden = pcRating3 != null
+                        ? _mergeWithPcData(analysis, pcRating3)
+                        : analysis;
                     return _buildOrderSuggestions(context, quote, overridden);
                   },
                 ),
@@ -243,13 +269,32 @@ class StockDetailPage extends StatelessWidget {
     );
   }
 
-  /// 用PC数据覆盖本地分析结果（评分 + 止损止盈 + 买入区间）
+  /// PC rating 字符串 → 本地 Rating 枚举（PC 是权威评级源，本地仅离线兜底）
+  Rating? _parsePcRating(String? rating) {
+    switch (rating) {
+      case 'strong_buy':
+        return Rating.strongBuy;
+      case 'buy':
+        return Rating.buy;
+      case 'watch':
+        return Rating.watch;
+      case 'attention':
+        return Rating.attention;
+      case 'avoid':
+        return Rating.avoid;
+      default:
+        return null;
+    }
+  }
+
+  /// 用PC数据覆盖本地分析结果（评分 + 评级 + 止损止盈 + 买入区间）
   AnalysisResult _mergeWithPcData(AnalysisResult original, dynamic pcRating) {
     // 1. 合并策略评分（PC端动态权重评分优先，缺失的用本地补）
     final mergedScores = Map<String, double>.from(
         (pcRating.strategyScores as Map<String, dynamic>?)?.map(
               (k, v) => MapEntry(k, (v as num).toDouble()),
-            ) ?? {});
+            ) ??
+            {});
     original.strategyScores.forEach((k, v) {
       mergedScores.putIfAbsent(k, () => v);
     });
@@ -263,8 +308,11 @@ class StockDetailPage extends StatelessWidget {
 
     final pcRR = (pcRating.riskRewardRatio as num?)?.toDouble();
 
+    // 用 PC 评级覆盖本地（决策卡与条件单建议应显示同一评级）
+    final pcRatingEnum = _parsePcRating(pcRating.rating as String?);
+
     return AnalysisResult(
-      rating: original.rating,
+      rating: pcRatingEnum ?? original.rating,
       totalScore: pcScore ?? original.totalScore,
       strategyScores: mergedScores,
       trendPassed: original.trendPassed,
@@ -286,7 +334,9 @@ class StockDetailPage extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)
+        ],
       ),
       child: Column(
         children: [
@@ -296,13 +346,19 @@ class StockDetailPage extends StatelessWidget {
             children: [
               Text(
                 quote.priceText,
-                style: TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: changeColor),
+                style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.bold,
+                    color: changeColor),
               ),
               const SizedBox(width: 12),
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
                 child: Text(quote.changePercentText,
-                    style: TextStyle(fontSize: 16, color: changeColor, fontWeight: FontWeight.w500)),
+                    style: TextStyle(
+                        fontSize: 16,
+                        color: changeColor,
+                        fontWeight: FontWeight.w500)),
               ),
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -322,7 +378,11 @@ class StockDetailPage extends StatelessWidget {
               _infoItem('最高', quote.highPrice.toStringAsFixed(2)),
               _infoItem('最低', quote.lowPrice.toStringAsFixed(2)),
               _infoItem('换手', '${quote.turnoverRate.toStringAsFixed(1)}%'),
-              _infoItem('量比', quote.volumeRatio > 0 ? quote.volumeRatio.toStringAsFixed(1) : '-'),
+              _infoItem(
+                  '量比',
+                  quote.volumeRatio > 0
+                      ? quote.volumeRatio.toStringAsFixed(1)
+                      : '-'),
             ],
           ),
         ],
@@ -333,13 +393,17 @@ class StockDetailPage extends StatelessWidget {
   Widget _infoItem(String label, String value) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: AppTheme.textHint, fontSize: 12)),
+        Text(label,
+            style: const TextStyle(color: AppTheme.textHint, fontSize: 12)),
         const SizedBox(height: 4),
-        Text(value, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.w500)),
+        Text(value,
+            style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w500)),
       ],
     );
   }
-
 
   // ═══════════════════════════════════════════
   // PC端分析及建议（详细评分、买入区间、策略分解）
@@ -347,16 +411,30 @@ class StockDetailPage extends StatelessWidget {
 
   Widget _buildPcAnalysisCard(dynamic pcRating, {required dynamic analysis}) {
     final bool hasPc = pcRating != null;
-    final String stars = hasPc ? (pcRating.ratingStars as String? ?? '') : (analysis?.ratingStars ?? '');
-    final String label = hasPc ? (pcRating.ratingLabel as String? ?? '') : (analysis?.ratingLabel ?? '');
-    final double score = hasPc ? ((pcRating.totalScore as num?)?.toDouble() ?? 0) : (analysis?.totalScore ?? 0);
-    final double rr = hasPc ? ((pcRating.riskRewardRatio as num?)?.toDouble() ?? 0) : (analysis?.riskRewardRatio ?? 0);
-    final String trendDesc = hasPc ? (pcRating.trendDescription as String? ?? '') : (analysis?.trendDescription ?? '');
+    final String stars = hasPc
+        ? (pcRating.ratingStars as String? ?? '')
+        : (analysis?.ratingStars ?? '');
+    final String label = hasPc
+        ? (pcRating.ratingLabel as String? ?? '')
+        : (analysis?.ratingLabel ?? '');
+    final double score = hasPc
+        ? ((pcRating.totalScore as num?)?.toDouble() ?? 0)
+        : (analysis?.totalScore ?? 0);
+    final double rr = hasPc
+        ? ((pcRating.riskRewardRatio as num?)?.toDouble() ?? 0)
+        : (analysis?.riskRewardRatio ?? 0);
+    final String trendDesc = hasPc
+        ? (pcRating.trendDescription as String? ?? '')
+        : (analysis?.trendDescription ?? '');
 
     Color ratingColor;
-    if (score >= 1.5) { ratingColor = const Color(0xFF1B5E20); }
-    else if (score >= 1.0) { ratingColor = const Color(0xFF4CAF50); }
-    else { ratingColor = const Color(0xFF999999); }
+    if (score >= 1.5) {
+      ratingColor = const Color(0xFF1B5E20);
+    } else if (score >= 1.0) {
+      ratingColor = const Color(0xFF4CAF50);
+    } else {
+      ratingColor = const Color(0xFF999999);
+    }
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -365,7 +443,9 @@ class StockDetailPage extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: ratingColor.withOpacity(0.25), width: 1),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6)
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -375,7 +455,8 @@ class StockDetailPage extends StatelessWidget {
             children: [
               const Icon(Icons.computer, size: 18, color: Color(0xFF1565C0)),
               const SizedBox(width: 6),
-              const Text('PC端分析', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              const Text('PC端分析',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
               const Spacer(),
             ],
           ),
@@ -384,10 +465,14 @@ class StockDetailPage extends StatelessWidget {
           // 评分 + 盈亏比 + 买入区间
           Row(
             children: [
-              Text('${score.toStringAsFixed(1)}分', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              Text('${score.toStringAsFixed(1)}分',
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600)),
               if (rr > 0) ...[
                 const SizedBox(width: 12),
-                Text('盈亏比 ${rr.toStringAsFixed(1)}:1', style: const TextStyle(fontSize: 12, color: AppTheme.textHint)),
+                Text('盈亏比 ${rr.toStringAsFixed(1)}:1',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textHint)),
               ],
             ],
           ),
@@ -398,11 +483,15 @@ class StockDetailPage extends StatelessWidget {
             const SizedBox(height: 6),
             Row(
               children: [
-                const Icon(Icons.trending_up, size: 14, color: AppTheme.textHint),
+                const Icon(Icons.trending_up,
+                    size: 14, color: AppTheme.textHint),
                 const SizedBox(width: 4),
                 Expanded(
-                  child: Text(trendDesc, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  child: Text(trendDesc,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textSecondary),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
                 ),
               ],
             ),
@@ -426,12 +515,24 @@ class StockDetailPage extends StatelessWidget {
     // — 提取数据（PC端优先） —
     final bool hasPc = pcRating != null;
     final String ratingStr = hasPc ? (pcRating.rating as String? ?? '') : '';
-    final String label = hasPc ? (pcRating.ratingLabel as String? ?? '') : (analysis?.ratingLabel ?? '');
-    final String stars = hasPc ? (pcRating.ratingStars as String? ?? '') : (analysis?.ratingStars ?? '');
-    final double score = hasPc ? ((pcRating.totalScore as num?)?.toDouble() ?? 0) : (analysis?.totalScore ?? 0);
-    final double rr = hasPc ? ((pcRating.riskRewardRatio as num?)?.toDouble() ?? 0) : (analysis?.riskRewardRatio ?? 0);
-    final double? stopLoss = hasPc ? (pcRating.stopLossPrice as num?)?.toDouble() : analysis?.stopLossPrice;
-    final double? takeProfit = hasPc ? (pcRating.takeProfitPrice as num?)?.toDouble() : analysis?.takeProfitPrice;
+    final String label = hasPc
+        ? (pcRating.ratingLabel as String? ?? '')
+        : (analysis?.ratingLabel ?? '');
+    final String stars = hasPc
+        ? (pcRating.ratingStars as String? ?? '')
+        : (analysis?.ratingStars ?? '');
+    final double score = hasPc
+        ? ((pcRating.totalScore as num?)?.toDouble() ?? 0)
+        : (analysis?.totalScore ?? 0);
+    final double rr = hasPc
+        ? ((pcRating.riskRewardRatio as num?)?.toDouble() ?? 0)
+        : (analysis?.riskRewardRatio ?? 0);
+    final double? stopLoss = hasPc
+        ? (pcRating.stopLossPrice as num?)?.toDouble()
+        : analysis?.stopLossPrice;
+    final double? takeProfit = hasPc
+        ? (pcRating.takeProfitPrice as num?)?.toDouble()
+        : analysis?.takeProfitPrice;
     final String buyRange = hasPc ? (pcRating.buyRange as String? ?? '') : '';
 
     // 解析买入区间
@@ -446,14 +547,19 @@ class StockDetailPage extends StatelessWidget {
 
     // 评级判定（用评分阈值代替字符串匹配，对齐全市场评分分布）
     // S: >=1.5(前0.2%)  A: >=1.0(前7%)  B: >=0.5(前28%)
-    bool isTop = score >= 1.0;      // 前7%的股票
-    bool isGood = score >= 0.5;     // 前28%
+    bool isTop = score >= 1.0; // 前7%的股票
+    bool isGood = score >= 0.5; // 前28%
     bool isAvoid = ratingStr == 'avoid';
     Color ratingColor;
-    if (score >= 1.5) { ratingColor = const Color(0xFF1B5E20); }
-    else if (score >= 1.0) { ratingColor = const Color(0xFF4CAF50); }
-    else if (score >= 0.5) { ratingColor = const Color(0xFFF57F17); }
-    else { ratingColor = const Color(0xFF999999); }
+    if (score >= 1.5) {
+      ratingColor = const Color(0xFF1B5E20);
+    } else if (score >= 1.0) {
+      ratingColor = const Color(0xFF4CAF50);
+    } else if (score >= 0.5) {
+      ratingColor = const Color(0xFFF57F17);
+    } else {
+      ratingColor = const Color(0xFF999999);
+    }
 
     // 价格相对买入区间的位置 + 评分 → 操盘动作
     String action, aggText, conText, sigText;
@@ -463,55 +569,95 @@ class StockDetailPage extends StatelessWidget {
     if (isHeld) {
       // 已持仓 → 止损止盈逻辑
       if (stopLoss != null && currentPrice <= stopLoss) {
-        action = "止损"; actionColor = AppTheme.signalSell;
-        aggText = "市价卖出"; conText = "跌破${stopLoss.toStringAsFixed(2)}离场"; sigText = "严格执行止损";
+        action = "止损";
+        actionColor = AppTheme.signalSell;
+        aggText = "市价卖出";
+        conText = "跌破${stopLoss.toStringAsFixed(2)}离场";
+        sigText = "严格执行止损";
       } else if (takeProfit != null && currentPrice >= takeProfit) {
-        action = "止盈"; actionColor = AppTheme.signalBuy;
-        aggText = "全部止盈"; conText = "先卖一半锁利"; sigText = "注意MACD顶背离";
+        action = "止盈";
+        actionColor = AppTheme.signalBuy;
+        aggText = "全部止盈";
+        conText = "先卖一半锁利";
+        sigText = "注意MACD顶背离";
       } else if (stopLoss != null && currentPrice <= stopLoss * 1.05) {
-        action = "警戒"; actionColor = AppTheme.signalHold;
-        aggText = "准备止损"; conText = "减仓降风险"; sigText = "等反弹再减";
+        action = "警戒";
+        actionColor = AppTheme.signalHold;
+        aggText = "准备止损";
+        conText = "减仓降风险";
+        sigText = "等反弹再减";
       } else {
-        action = "持有"; actionColor = AppTheme.signalHold;
-        aggText = "移动止损"; conText = "持有待涨"; sigText = "未触信号";
+        action = "持有";
+        actionColor = AppTheme.signalHold;
+        aggText = "移动止损";
+        conText = "持有待涨";
+        sigText = "未触信号";
       }
     } else if (isAvoid) {
-      action = "回避"; actionColor = AppTheme.signalSell;
-      aggText = "不建议"; conText = "评级回避"; sigText = "等待后续";
+      action = "回避";
+      actionColor = AppTheme.signalSell;
+      aggText = "不建议";
+      conText = "评级回避";
+      sigText = "等待后续";
     } else if (entryLow <= 0 || entryHigh <= 0) {
-      action = "等待"; actionColor = AppTheme.textHint;
-      aggText = "无数据"; conText = "数据不足"; sigText = "-";
+      action = "等待";
+      actionColor = AppTheme.textHint;
+      aggText = "无数据";
+      conText = "数据不足";
+      sigText = "-";
     } else {
-      deviation = entryLow > 0 ? ((currentPrice - entryLow) / entryLow * 100) : 0;
+      deviation =
+          entryLow > 0 ? ((currentPrice - entryLow) / entryLow * 100) : 0;
       final bool strongSignal = isTop;
       // 根据市场状态调整动作强度
-      bool allowBuy = marketRegime.contains('强牛') || marketRegime.contains('弱牛');
+      bool allowBuy =
+          marketRegime.contains('强牛') || marketRegime.contains('弱牛');
       bool allowAttention = !marketRegime.contains('强熊');
       if (currentPrice <= entryHigh) {
         // 价格在买入区间或以下
         if (currentPrice < entryLow * 0.95) {
-          action = strongSignal ? "关注" : "等待"; actionColor = AppTheme.signalHold;
-          aggText = "等企稳"; conText = "等回到${entryLow.toStringAsFixed(2)}"; sigText = "等MACD金叉";
+          action = strongSignal ? "关注" : "等待";
+          actionColor = AppTheme.signalHold;
+          aggText = "等企稳";
+          conText = "等回到${entryLow.toStringAsFixed(2)}";
+          sigText = "等MACD金叉";
         } else if (currentPrice < entryLow) {
           if (strongSignal && allowBuy) {
-            action = "低吸"; actionColor = AppTheme.signalBuy;
-            aggText = "接近区间"; conText = "回踩${entryLow.toStringAsFixed(2)}确认"; sigText = "等放量";
+            action = "低吸";
+            actionColor = AppTheme.signalBuy;
+            aggText = "接近区间";
+            conText = "回踩${entryLow.toStringAsFixed(2)}确认";
+            sigText = "等放量";
           } else {
-            action = allowAttention ? "关注" : "等待"; actionColor = allowAttention ? AppTheme.signalHold : AppTheme.textHint;
-            aggText = "接近区间"; conText = "回踩${entryLow.toStringAsFixed(2)}确认"; sigText = "等放量";
+            action = allowAttention ? "关注" : "等待";
+            actionColor =
+                allowAttention ? AppTheme.signalHold : AppTheme.textHint;
+            aggText = "接近区间";
+            conText = "回踩${entryLow.toStringAsFixed(2)}确认";
+            sigText = "等放量";
           }
         } else {
           if (strongSignal && allowBuy) {
-            action = "建仓"; actionColor = AppTheme.signalBuy;
-            aggText = "正常建仓"; conText = "回踩${entryLow.toStringAsFixed(2)}加仓"; sigText = "止损${stopLoss?.toStringAsFixed(2)??'-'}";
+            action = "建仓";
+            actionColor = AppTheme.signalBuy;
+            aggText = "正常建仓";
+            conText = "回踩${entryLow.toStringAsFixed(2)}加仓";
+            sigText = "止损${stopLoss?.toStringAsFixed(2) ?? '-'}";
           } else {
-            action = allowAttention ? "关注" : "等待"; actionColor = allowAttention ? AppTheme.signalHold : AppTheme.textHint;
-            aggText = "轻仓试探"; conText = "回踩${entryLow.toStringAsFixed(2)}确认"; sigText = "止损${stopLoss?.toStringAsFixed(2)??'-'}";
+            action = allowAttention ? "关注" : "等待";
+            actionColor =
+                allowAttention ? AppTheme.signalHold : AppTheme.textHint;
+            aggText = "轻仓试探";
+            conText = "回踩${entryLow.toStringAsFixed(2)}确认";
+            sigText = "止损${stopLoss?.toStringAsFixed(2) ?? '-'}";
           }
         }
       } else {
-        action = "等待"; actionColor = AppTheme.textHint;
-        aggText = "不追高"; conText = "等回踩${entryLow.toStringAsFixed(2)}"; sigText = "等回调信号";
+        action = "等待";
+        actionColor = AppTheme.textHint;
+        aggText = "不追高";
+        conText = "等回踩${entryLow.toStringAsFixed(2)}";
+        sigText = "等回调信号";
       }
     }
 
@@ -522,7 +668,9 @@ class StockDetailPage extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: ratingColor.withOpacity(0.3), width: 1.5),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8)
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -530,9 +678,11 @@ class StockDetailPage extends StatelessWidget {
           // ── 第一行：标题 + 等级 ──
           Row(
             children: [
-              const Icon(Icons.auto_awesome, size: 18, color: Color(0xFF1565C0)),
+              const Icon(Icons.auto_awesome,
+                  size: 18, color: Color(0xFF1565C0)),
               const SizedBox(width: 6),
-              const Text('综合决策', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              const Text('综合决策',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
               const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -541,7 +691,10 @@ class StockDetailPage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text('$stars $label',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: ratingColor)),
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: ratingColor)),
               ),
             ],
           ),
@@ -551,37 +704,49 @@ class StockDetailPage extends StatelessWidget {
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: actionColor.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(6),
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: actionColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(action,
+                      style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: actionColor)),
                 ),
-                child: Text(action,
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: actionColor)),
-              ),
-              const SizedBox(width: 12),
-              Text('${score.toStringAsFixed(1)}分',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-              if (rr > 0) ...[
-                const SizedBox(width: 8),
-                Text('盈亏比 ${rr.toStringAsFixed(1)}:1',
-                    style: const TextStyle(fontSize: 12, color: AppTheme.textHint)),
+                const SizedBox(width: 12),
+                Text('${score.toStringAsFixed(1)}分',
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w500)),
+                if (rr > 0) ...[
+                  const SizedBox(width: 8),
+                  Text('盈亏比 ${rr.toStringAsFixed(1)}:1',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppTheme.textHint)),
+                ],
+                if (deviation != 0) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                      '偏离 ${deviation >= 0 ? "+" : ""}${deviation.toStringAsFixed(1)}%',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: deviation.abs() > 5
+                              ? AppTheme.downColor
+                              : AppTheme.textHint)),
+                ],
               ],
-              if (deviation != 0) ...[
-                const SizedBox(width: 8),
-                Text('偏离 ${deviation >= 0 ? "+" : ""}${deviation.toStringAsFixed(1)}%',
-                    style: TextStyle(fontSize: 12, color: deviation.abs() > 5 ? AppTheme.downColor : AppTheme.textHint)),
-              ],
-            ],
-          ), // Row
+            ), // Row
           ), // SingleChildScrollView
           const SizedBox(height: 14),
 
           // ── 第三行：买入区间 + 止损止盈（紧凑） ──
           Wrap(
-            spacing: 8, runSpacing: 6,
+            spacing: 8,
+            runSpacing: 6,
             children: [
               if (buyRange.isNotEmpty)
                 _infoTag('区间', buyRange, const Color(0xFF1565C0)),
@@ -600,7 +765,8 @@ class StockDetailPage extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(child: _adviceChip3('保守', conText, AppTheme.signalHold)),
               const SizedBox(width: 6),
-              Expanded(child: _adviceChip3('信号', sigText, AppTheme.signalWatch)),
+              Expanded(
+                  child: _adviceChip3('信号', sigText, AppTheme.signalWatch)),
             ],
           ),
         ],
@@ -619,12 +785,14 @@ class StockDetailPage extends StatelessWidget {
       child: Row(
         children: [
           Text(label,
-              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color)),
+              style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.bold, color: color)),
           const SizedBox(width: 4),
           Flexible(
             child: Text(text,
                 style: TextStyle(fontSize: 10, color: AppTheme.textSecondary),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
           ),
         ],
       ),
@@ -641,20 +809,23 @@ class StockDetailPage extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)
+        ],
       ),
       child: Column(
         children: [
           const Icon(Icons.hourglass_empty, size: 36, color: AppTheme.textHint),
           const SizedBox(height: 8),
-          const Text('技术分析数据加载中', style: TextStyle(color: AppTheme.textSecondary)),
+          const Text('技术分析数据加载中',
+              style: TextStyle(color: AppTheme.textSecondary)),
           const SizedBox(height: 4),
-          const Text('需要至少20根K线数据', style: TextStyle(color: AppTheme.textHint, fontSize: 12)),
+          const Text('需要至少20根K线数据',
+              style: TextStyle(color: AppTheme.textHint, fontSize: 12)),
         ],
       ),
     );
   }
-
 
   // ============================================
   // 三类策略概览（紧凑行）
@@ -662,15 +833,27 @@ class StockDetailPage extends StatelessWidget {
 
   Widget _buildCategoryStrip(dynamic analysis, {String marketRegime = ''}) {
     final categories = [
-      {'name': '趋势', 'icon': Icons.trending_up, 'color': Color(0xFF2196F3),
-       'strategies': ['maVolume', 'turtleTrade', 'atrChannel'],
-       'kw': ['MaVolume', 'Turtle', 'ATR']},
-      {'name': '动量', 'icon': Icons.compare_arrows, 'color': Color(0xFF4CAF50),
-       'strategies': ['macdRsi', 'maCross'],
-       'kw': ['MACD', 'MA20/60', 'MA60']},
-      {'name': '反转', 'icon': Icons.swap_vert, 'color': Color(0xFFFF6B35),
-       'strategies': ['meanReversion', 'volumePrice', 'kdj'],
-       'kw': ['RSI', '量价', 'KDJ', '背离', '超卖', '超买']},
+      {
+        'name': '趋势',
+        'icon': Icons.trending_up,
+        'color': Color(0xFF2196F3),
+        'strategies': ['maVolume', 'turtleTrade', 'atrChannel'],
+        'kw': ['MaVolume', 'Turtle', 'ATR']
+      },
+      {
+        'name': '动量',
+        'icon': Icons.compare_arrows,
+        'color': Color(0xFF4CAF50),
+        'strategies': ['macdRsi', 'maCross'],
+        'kw': ['MACD', 'MA20/60', 'MA60']
+      },
+      {
+        'name': '反转',
+        'icon': Icons.swap_vert,
+        'color': Color(0xFFFF6B35),
+        'strategies': ['meanReversion', 'volumePrice', 'kdj'],
+        'kw': ['RSI', '量价', 'KDJ', '背离', '超卖', '超买']
+      },
     ];
 
     // 市场状态 → 策略权重映射
@@ -681,17 +864,21 @@ class StockDetailPage extends StatelessWidget {
       '弱熊': {'趋势': 0.15, '动量': 0.35, '反转': 0.50},
       '强熊': {'趋势': 0.05, '动量': 0.20, '反转': 0.75},
     };
-    final weights = regimeWeights.entries.firstWhere(
-      (e) => marketRegime.contains(e.key),
-      orElse: () => MapEntry('', const {}),
-    ).value;
+    final weights = regimeWeights.entries
+        .firstWhere(
+          (e) => marketRegime.contains(e.key),
+          orElse: () => MapEntry('', const {}),
+        )
+        .value;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6)
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -699,7 +886,8 @@ class StockDetailPage extends StatelessWidget {
           Row(children: [
             const Icon(Icons.category, size: 16, color: AppTheme.primaryDark),
             const SizedBox(width: 6),
-            const Text('不同策略分析', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+            const Text('不同策略分析',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
           ]),
           const SizedBox(height: 10),
           ...categories.map((cat) => _buildCatDetail(analysis, cat, weights)),
@@ -708,29 +896,49 @@ class StockDetailPage extends StatelessWidget {
     );
   }
 
-  Widget _buildCatDetail(dynamic analysis, Map<String, dynamic> cat, Map<String, double> weights) {
+  Widget _buildCatDetail(
+      dynamic analysis, Map<String, dynamic> cat, Map<String, double> weights) {
     final strategies = cat['strategies'] as List<String>;
     final color = cat['color'] as Color;
     final kw = cat['kw'] as List<String>;
     final name = cat['name'] as String;
     final weight = weights[name];
-    double sum = 0; int cnt = 0;
+    double sum = 0;
+    int cnt = 0;
     final stratScores = <MapEntry<String, double>>[];
     for (final s in strategies) {
       final v = analysis.strategyScores[s];
-      if (v != null) { sum += v; cnt++; stratScores.add(MapEntry(s, v)); }
+      if (v != null) {
+        sum += v;
+        cnt++;
+        stratScores.add(MapEntry(s, v));
+      }
     }
     final avg = cnt > 0 ? sum / cnt : 0.0;
     stratScores.sort((a, b) => b.value.compareTo(a.value));
-    final sigs = analysis.signals.where((s) => kw.any((k) => s.name.contains(k))).toList();
+    final sigs = analysis.signals
+        .where((s) => kw.any((k) => s.name.contains(k)))
+        .toList();
     final bullish = sigs.where((s) => s.type == SignalType.bullish).length;
     final bearish = sigs.where((s) => s.type == SignalType.bearish).length;
 
-    String action; Color ac;
-    if (avg >= 3 && bullish >= 1) { action = '积极'; ac = AppTheme.signalBuy; }
-    else if (avg <= -1 && bearish >= 1) { action = '谨慎'; ac = AppTheme.downColor; }
-    else if (avg >= 1) { action = '关注'; ac = AppTheme.signalHold; }
-    else { action = '观望'; ac = AppTheme.textHint; }
+    String action;
+    Color ac;
+    // 阈值对齐 PC 截面标准化评分尺度（PC strategy_scores 为标准化 Z 值，均值≈0）
+    // 积极≥1.0 / 关注≥0.5 / 谨慎≤-0.5，与决策卡 S/A/B 阈值同量级
+    if (avg >= 1.0 && bullish >= 1) {
+      action = '积极';
+      ac = AppTheme.signalBuy;
+    } else if (avg <= -0.5 && bearish >= 1) {
+      action = '谨慎';
+      ac = AppTheme.downColor;
+    } else if (avg >= 0.5) {
+      action = '关注';
+      ac = AppTheme.signalHold;
+    } else {
+      action = '观望';
+      ac = AppTheme.textHint;
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -746,7 +954,9 @@ class StockDetailPage extends StatelessWidget {
           Row(children: [
             Icon(cat['icon'] as IconData, size: 14, color: color),
             const SizedBox(width: 4),
-            Text(cat['name'] as String, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: color)),
+            Text(cat['name'] as String,
+                style: TextStyle(
+                    fontWeight: FontWeight.w600, fontSize: 13, color: color)),
             if (weight != null) ...[
               const SizedBox(width: 4),
               Container(
@@ -756,30 +966,51 @@ class StockDetailPage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(3),
                 ),
                 child: const Text('等权',
-                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w500, color: AppTheme.textHint)),
+                    style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w500,
+                        color: AppTheme.textHint)),
               ),
             ],
             const SizedBox(width: 4),
-            Text(avg >= 0 ? '+'+avg.toStringAsFixed(1) : avg.toStringAsFixed(1),
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: avg > 0 ? color : AppTheme.textHint)),
+            Text(
+                avg >= 0
+                    ? '+' + avg.toStringAsFixed(1)
+                    : avg.toStringAsFixed(1),
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: avg > 0 ? color : AppTheme.textHint)),
             const Spacer(),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
               decoration: BoxDecoration(
-                color: ac.withOpacity(0.12), borderRadius: BorderRadius.circular(4),
+                color: ac.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(4),
               ),
-              child: Text(action, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: ac)),
+              child: Text(action,
+                  style: TextStyle(
+                      fontSize: 10, fontWeight: FontWeight.bold, color: ac)),
             ),
             if (bullish > 0 || bearish > 0) ...[
               const SizedBox(width: 6),
-              Text('$bullish↑ $bearish↓', style: TextStyle(fontSize: 9, color: AppTheme.textHint)),
+              Text('$bullish↑ $bearish↓',
+                  style: TextStyle(fontSize: 9, color: AppTheme.textHint)),
             ],
           ]),
           const SizedBox(height: 4),
-          Row(children: stratScores.map((e) {
-            final labels = {'maVolume': '均量', 'turtleTrade': '海龟', 'atrChannel': 'ATR',
-                'macdRsi': 'MACD', 'maCross': 'MA交叉',
-                'meanReversion': '均值', 'volumePrice': '量价', 'kdj': 'KDJ'};
+          Row(
+              children: stratScores.map((e) {
+            final labels = {
+              'maVolume': '均量',
+              'turtleTrade': '海龟',
+              'atrChannel': 'ATR',
+              'macdRsi': 'MACD',
+              'maCross': 'MA交叉',
+              'meanReversion': '均值',
+              'volumePrice': '量价',
+              'kdj': 'KDJ'
+            };
             final lb = labels[e.key] ?? e.key;
             return Padding(
               padding: EdgeInsets.only(right: 6),
@@ -789,19 +1020,32 @@ class StockDetailPage extends StatelessWidget {
                   color: AppTheme.signalBuy.withOpacity(0.08),
                   borderRadius: BorderRadius.circular(3),
                 ),
-                child: Text('$lb${e.value >= 0 ? "+" : ""}${e.value.toStringAsFixed(1)}',
-                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w500, color: AppTheme.signalBuy)),
+                child: Text(
+                    '$lb${e.value >= 0 ? "+" : ""}${e.value.toStringAsFixed(1)}',
+                    style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w500,
+                        color: AppTheme.signalBuy)),
               ),
             );
           }).toList()),
           if (sigs.isNotEmpty) ...[
             const SizedBox(height: 4),
             ...sigs.take(2).map((s) => Row(children: [
-              Icon(s.type == SignalType.bullish ? Icons.arrow_upward : Icons.arrow_downward,
-                  size: 10, color: s.type == SignalType.bullish ? AppTheme.upColor : AppTheme.downColor),
-              const SizedBox(width: 3),
-              Expanded(child: Text(s.name, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
-            ])),
+                  Icon(
+                      s.type == SignalType.bullish
+                          ? Icons.arrow_upward
+                          : Icons.arrow_downward,
+                      size: 10,
+                      color: s.type == SignalType.bullish
+                          ? AppTheme.upColor
+                          : AppTheme.downColor),
+                  const SizedBox(width: 3),
+                  Expanded(
+                      child: Text(s.name,
+                          style: const TextStyle(
+                              fontSize: 10, color: AppTheme.textSecondary))),
+                ])),
           ],
         ],
       ),
@@ -809,7 +1053,8 @@ class StockDetailPage extends StatelessWidget {
   }
 
   /// 持仓信息卡片（含录入表单）
-  Widget _buildPositionSection(BuildContext context, dynamic quote, dynamic analysis) {
+  Widget _buildPositionSection(
+      BuildContext context, dynamic quote, dynamic analysis) {
     final positionProvider = context.watch<PositionProvider>();
     final stockProvider = context.watch<StockProvider>();
     final stock = stockProvider.currentStock;
@@ -829,7 +1074,9 @@ class StockDetailPage extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)
+          ],
         ),
         child: Row(
           children: [
@@ -846,15 +1093,19 @@ class StockDetailPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('持仓', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const Text('持仓',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 4),
                   Text(
                     '成本 ${pos.buyPrice.toStringAsFixed(2)} × ${pos.quantity}股',
-                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                    style: const TextStyle(
+                        color: AppTheme.textSecondary, fontSize: 12),
                   ),
                   Text(
                     '买入 ${pos.buyDate.toLocal().toString().substring(0, 10)}',
-                    style: const TextStyle(color: AppTheme.textHint, fontSize: 11),
+                    style:
+                        const TextStyle(color: AppTheme.textHint, fontSize: 11),
                   ),
                 ],
               ),
@@ -863,24 +1114,30 @@ class StockDetailPage extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text('${sign}${pl.toStringAsFixed(0)}',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: plColor)),
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: plColor)),
                 Text('${sign}${plp.toStringAsFixed(1)}%',
                     style: TextStyle(fontSize: 13, color: plColor)),
               ],
             ),
             const SizedBox(width: 8),
             IconButton(
-              icon: const Icon(Icons.edit_square, size: 18, color: AppTheme.textHint),
+              icon: const Icon(Icons.edit_square,
+                  size: 18, color: AppTheme.textHint),
               tooltip: '编辑持仓',
               onPressed: () => _showPositionEditor(context, pos, stock, code),
             ),
             IconButton(
-              icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.downColor),
+              icon: const Icon(Icons.delete_outline,
+                  size: 18, color: AppTheme.downColor),
               tooltip: '删除持仓',
               onPressed: () {
                 positionProvider.removePosition(code);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('持仓已删除'), duration: Duration(seconds: 1)),
+                  const SnackBar(
+                      content: Text('持仓已删除'), duration: Duration(seconds: 1)),
                 );
               },
             ),
@@ -900,11 +1157,14 @@ class StockDetailPage extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)
+        ],
       ),
       child: Row(
         children: [
-          const Icon(Icons.add_shopping_cart, size: 18, color: AppTheme.primaryDark),
+          const Icon(Icons.add_shopping_cart,
+              size: 18, color: AppTheme.primaryDark),
           const SizedBox(width: 8),
           const Expanded(child: Text('记录持仓盈亏', style: TextStyle(fontSize: 13))),
           TextButton(
@@ -917,9 +1177,12 @@ class StockDetailPage extends StatelessWidget {
   }
 
   /// 持仓编辑对话框
-  void _showPositionEditor(BuildContext context, Position? existing, StockInfo? stock, String code) {
-    final buyPriceCtrl = TextEditingController(text: existing?.buyPrice.toString() ?? '');
-    final quantityCtrl = TextEditingController(text: existing?.quantity.toString() ?? '100');
+  void _showPositionEditor(
+      BuildContext context, Position? existing, StockInfo? stock, String code) {
+    final buyPriceCtrl =
+        TextEditingController(text: existing?.buyPrice.toString() ?? '');
+    final quantityCtrl =
+        TextEditingController(text: existing?.quantity.toString() ?? '100');
     DateTime buyDate = existing?.buyDate ?? DateTime.now();
 
     showDialog(
@@ -933,13 +1196,15 @@ class StockDetailPage extends StatelessWidget {
               TextField(
                 controller: buyPriceCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '买入价', hintText: '如 168.50'),
+                decoration: const InputDecoration(
+                    labelText: '买入价', hintText: '如 168.50'),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: quantityCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '持股数量', hintText: '如 100'),
+                decoration:
+                    const InputDecoration(labelText: '持股数量', hintText: '如 100'),
               ),
               const SizedBox(height: 8),
               Row(
@@ -953,7 +1218,8 @@ class StockDetailPage extends StatelessWidget {
                         firstDate: DateTime(2020),
                         lastDate: DateTime.now(),
                       );
-                      if (picked != null) setDialogState(() => buyDate = picked);
+                      if (picked != null)
+                        setDialogState(() => buyDate = picked);
                     },
                     child: Text(buyDate.toLocal().toString().substring(0, 10)),
                   ),
@@ -962,12 +1228,15 @@ class StockDetailPage extends StatelessWidget {
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('取消')),
             FilledButton(
               onPressed: () {
                 final price = double.tryParse(buyPriceCtrl.text);
                 final qty = int.tryParse(quantityCtrl.text);
-                if (price == null || qty == null || price <= 0 || qty <= 0) return;
+                if (price == null || qty == null || price <= 0 || qty <= 0)
+                  return;
 
                 final position = Position(
                   code: code,
@@ -981,7 +1250,8 @@ class StockDetailPage extends StatelessWidget {
                 final provider = context.read<PositionProvider>();
                 if (existing != null) {
                   // 找到索引并替换
-                  final idx = provider.positions.indexWhere((p) => p.code == code);
+                  final idx =
+                      provider.positions.indexWhere((p) => p.code == code);
                   if (idx >= 0) provider.updatePosition(idx, position);
                 } else {
                   provider.addPosition(position);
@@ -989,7 +1259,9 @@ class StockDetailPage extends StatelessWidget {
 
                 Navigator.of(ctx).pop();
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(existing != null ? '持仓已更新' : '持仓已录入'), duration: Duration(seconds: 1)),
+                  SnackBar(
+                      content: Text(existing != null ? '持仓已更新' : '持仓已录入'),
+                      duration: Duration(seconds: 1)),
                 );
               },
               child: const Text('保存'),
@@ -1001,7 +1273,8 @@ class StockDetailPage extends StatelessWidget {
   }
 
   /// 条件单建议卡片
-  Widget _buildOrderSuggestions(BuildContext context, dynamic quote, AnalysisResult analysis) {
+  Widget _buildOrderSuggestions(
+      BuildContext context, dynamic quote, AnalysisResult analysis) {
     final positionProvider = context.watch<PositionProvider>();
     final watchlistProvider = context.watch<WatchlistProvider>();
     final stockProvider = context.watch<StockProvider>();
@@ -1028,18 +1301,24 @@ class StockDetailPage extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.assignment, size: 18, color: AppTheme.primaryDark),
+              const Icon(Icons.assignment,
+                  size: 18, color: AppTheme.primaryDark),
               const SizedBox(width: 6),
-              Text('条件单建议 · ${style.label}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              Text('条件单建议 · ${style.label}',
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w600)),
               const Spacer(),
-              Text('招商证券', style: TextStyle(fontSize: 11, color: AppTheme.textHint)),
+              Text('招商证券',
+                  style: TextStyle(fontSize: 11, color: AppTheme.textHint)),
             ],
           ),
           const SizedBox(height: 8),
@@ -1070,18 +1349,22 @@ class StockDetailPage extends StatelessWidget {
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(suggestion.type.label,
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color)),
+                style: TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.bold, color: color)),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(suggestion.description, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                Text(suggestion.description,
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary)),
                 const SizedBox(height: 2),
                 Text(
                   suggestion.clipboardText,
-                  style: const TextStyle(fontSize: 11, color: AppTheme.textHint),
+                  style:
+                      const TextStyle(fontSize: 11, color: AppTheme.textHint),
                 ),
               ],
             ),
@@ -1116,14 +1399,17 @@ class StockDetailPage extends StatelessWidget {
             color: color.withOpacity(0.1),
             borderRadius: BorderRadius.circular(4),
           ),
-          child: Text('$label $value', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+          child: Text('$label $value',
+              style: TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600, color: color)),
         ),
       ],
     );
   }
 
   /// 快捷进入卡片（详情页空白时显示PC推荐）
-  Widget _buildQuickAccessCard(BuildContext context, dynamic pick, dynamic pcProvider) {
+  Widget _buildQuickAccessCard(
+      BuildContext context, dynamic pick, dynamic pcProvider) {
     String actionText = '';
     try {
       final pcRating = pcProvider.getRating(pick.symbol);
@@ -1144,19 +1430,28 @@ class StockDetailPage extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: ListTile(
         leading: Container(
-          width: 4, height: 40,
+          width: 4,
+          height: 40,
           decoration: BoxDecoration(
-            color: AppTheme.primaryDark, borderRadius: BorderRadius.circular(2),
+            color: AppTheme.primaryDark,
+            borderRadius: BorderRadius.circular(2),
           ),
         ),
-        title: Text(pick.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text('${pick.symbol}  ${pick.ratingLabel}  ${pick.totalScore.toStringAsFixed(1)}分',
+        title: Text(pick.name,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text(
+            '${pick.symbol}  ${pick.ratingLabel}  ${pick.totalScore.toStringAsFixed(1)}分',
             style: const TextStyle(fontSize: 12)),
         trailing: actionText.isNotEmpty
-            ? Text(actionText, style: const TextStyle(color: AppTheme.primaryDark, fontSize: 11))
+            ? Text(actionText,
+                style:
+                    const TextStyle(color: AppTheme.primaryDark, fontSize: 11))
             : null,
         onTap: () {
-          final stock = StockInfo(code: pick.symbol, name: pick.name, market: _inferMarket(pick.symbol));
+          final stock = StockInfo(
+              code: pick.symbol,
+              name: pick.name,
+              market: _inferMarket(pick.symbol));
           context.read<StockProvider>().loadStockDetail(stock);
         },
       ),
@@ -1171,7 +1466,3 @@ class StockDetailPage extends StatelessWidget {
     return 'SH';
   }
 }
-
-
-
-
