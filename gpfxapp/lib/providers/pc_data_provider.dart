@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/pc_recommendation.dart';
 import '../models/strategy_config.dart';
+import '../providers/watchlist_provider.dart';
 import '../services/cos_api_service.dart';
 import '../services/storage_service.dart';
 
@@ -12,12 +13,15 @@ class PcDataProvider extends ChangeNotifier {
   final StorageService _storage = StorageService();
 
   /// 可选：关联WatchlistProvider，自动同步PC推荐股票
-  dynamic _watchlistProvider;
+  WatchlistProvider? _watchlistProvider;
 
   PcPortfolioSummary? _summary;
   PcFullRatings? _fullRatings;
   Map<String, PcRatingResult> _ratingsMap = {};
   Map<String, dynamic>? _strategyBacktest;
+
+  String _cosSecretId = '';
+  String _cosSecretKey = '';
 
   bool _isLoading = false;
   String? _error;
@@ -45,6 +49,18 @@ class PcDataProvider extends ChangeNotifier {
 
   /// 建议仓位
   double get suggestedExposure => _summary?.suggestedExposure ?? 0;
+
+  String get cosSecretId => _cosSecretId;
+  String get cosSecretKey => _cosSecretKey;
+
+  /// 从Hive重新加载COS凭证并更新认证
+  Future<void> updateCosAuth() async {
+    _cosSecretId = await _storage.getCosSecretId();
+    _cosSecretKey = await _storage.getCosSecretKey();
+    if (_cosSecretId.isNotEmpty && _cosSecretKey.isNotEmpty) {
+      _cos.configureAuth(_cosSecretId, _cosSecretKey);
+    }
+  }
 
   /// PC端评级数据是否已加载
   bool get hasRatings => _ratingsMap.isNotEmpty;
@@ -77,7 +93,7 @@ class PcDataProvider extends ChangeNotifier {
   // ── 初始化 ──
 
   /// 关联WatchlistProvider（自动同步PC推荐股票）
-  void linkWatchlistProvider(dynamic provider) {
+  void linkWatchlistProvider(WatchlistProvider provider) {
     _watchlistProvider = provider;
   }
 
@@ -88,6 +104,13 @@ class PcDataProvider extends ChangeNotifier {
     final savedEnabled = await _storage.getCosEnabled();
     if (savedBucket.isNotEmpty) _cos.configure(savedBucket, savedRegion);
     _cos.enabled = savedEnabled;
+
+    // 加载 COS 鉴权凭据（用于上传自选股备份）
+    _cosSecretId = await _storage.getCosSecretId();
+    _cosSecretKey = await _storage.getCosSecretKey();
+    if (_cosSecretId.isNotEmpty && _cosSecretKey.isNotEmpty) {
+      _cos.configureAuth(_cosSecretId, _cosSecretKey);
+    }
 
     // 先加载本地缓存（确保页面立即有数据显示）
     await _loadFromCache();
@@ -140,6 +163,7 @@ class PcDataProvider extends ChangeNotifier {
             'rating': p.rating, 'rating_label': p.ratingLabel,
             'rating_stars': p.ratingStars,
             'total_score': p.totalScore,
+            'consecutive_days': p.consecutiveDays,
             'current_price': p.currentPrice,
           }).toList(),
         });
@@ -185,55 +209,63 @@ class PcDataProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
+    // 三个 COS 请求独立执行、独立错误处理
+    // 摘要 — 必须成功（否则设为 error）
     try {
-      // 拉取摘要（首页展示用）— 仅在获取到有效数据时更新
       final newSummary = await _cos.fetchPortfolioSummary();
       if (newSummary != null) {
         _summary = newSummary;
       }
+    } catch (e) {
+      _error = 'PC端摘要加载失败: $e';
+    }
 
-      // 拉取全量评级
+    // 全量评级 — 大文件(5MB)，失败不影响首页
+    try {
       final newRatings = await _cos.fetchFullRatings();
       if (newRatings != null) {
         _fullRatings = newRatings;
-        // 构建快速查询索引
         _ratingsMap = {};
         for (final r in _fullRatings!.ratings) {
           _ratingsMap[r.symbol] = r;
         }
       }
+    } catch (e) {
+      // 评级加载失败不覆盖 _error，首页摘要仍可展示
+      debugPrint('全量评级加载失败（已降级）: $e');
+    }
 
-      // 拉取策略收益率回测数据
+    // 策略回测 — 独立
+    try {
       final bt = await _cos.fetchStrategyBacktest();
       if (bt != null) _strategyBacktest = bt;
+    } catch (_) {}
 
-      // 自动同步PC推荐股票到WatchlistProvider
-      _syncAutoRecommend();
-
+    // 只要摘要或评级任意有数据就清除 error
+    if (_summary != null || _fullRatings != null) {
       _error = null;
       _lastFetch = DateTime.now();
-      // 保存到Hive本地缓存（含时间戳，确保Provider重建后仍可恢复）
-      _saveToCache();
-      if (_fullRatings != null && _fullRatings!.strategyConfig.isNotEmpty) {
-        final config = await _storage.getStrategyConfig();
-        // 只有用户未自定义时才同步PC端配置
-        if (!await _storage.hasCustomizedStrategy()) {
-          final pcConfig = StrategyConfig.fromJson({
-            ..._fullRatings!.strategyConfig,
-            // 保留用户的通知偏好
-            'notificationEnabled': config.notificationEnabled,
-            'notifyGoldenCross': config.notifyGoldenCross,
-            'notifyOversold': config.notifyOversold,
-            'notifyBreakout': config.notifyBreakout,
-            'notifyBuyZone': config.notifyBuyZone,
-            'notifyStopLoss': config.notifyStopLoss,
-            'notifyTakeProfit': config.notifyTakeProfit,
-          });
-          await _storage.saveStrategyConfig(pcConfig);
-        }
+    }
+
+    // 后续处理
+    _syncAutoRecommend();
+    _saveToCache();
+
+    if (_fullRatings != null && _fullRatings!.strategyConfig.isNotEmpty) {
+      final config = await _storage.getStrategyConfig();
+      if (!await _storage.hasCustomizedStrategy()) {
+        final pcConfig = StrategyConfig.fromJson({
+          ..._fullRatings!.strategyConfig,
+          'notificationEnabled': config.notificationEnabled,
+          'notifyGoldenCross': config.notifyGoldenCross,
+          'notifyOversold': config.notifyOversold,
+          'notifyBreakout': config.notifyBreakout,
+          'notifyBuyZone': config.notifyBuyZone,
+          'notifyStopLoss': config.notifyStopLoss,
+          'notifyTakeProfit': config.notifyTakeProfit,
+        });
+        await _storage.saveStrategyConfig(pcConfig);
       }
-    } catch (e) {
-      _error = e.toString();
     }
 
     _isLoading = false;
@@ -257,7 +289,8 @@ class PcDataProvider extends ChangeNotifier {
 
   /// 自动同步PC推荐股票到WatchlistProvider展示和告警
   void _syncAutoRecommend() {
-    if (_watchlistProvider == null) return;
+    final wp = _watchlistProvider;
+    if (wp == null) return;
     try {
       // 同步展示列表
       final topPicks = _summary?.topPicks ?? [];
@@ -270,12 +303,12 @@ class PcDataProvider extends ChangeNotifier {
           'totalScore': p.totalScore,
           'currentPrice': p.currentPrice,
         }).toList();
-        _watchlistProvider.updatePcRecommendedStocks(pickData);
+        wp.updatePcRecommendedStocks(pickData);
       }
       // 同步告警数据索引
       final recs = buildRecommendationsMap();
       if (recs.isNotEmpty) {
-        _watchlistProvider.setPcRecommendations(recs);
+        wp.setPcRecommendations(recs);
       }
     } catch (_) {}
   }

@@ -11,10 +11,12 @@ import '../services/analysis_engine.dart';
 import '../services/storage_service.dart';
 import '../services/notification_service.dart';
 import '../services/pc_alert_service.dart';
+import '../services/cos_api_service.dart';
 
 class WatchlistProvider extends ChangeNotifier {
   final StorageService _storage = StorageService();
   final StockApiService _api = StockApiService();
+  final CosApiService _cos = CosApiService();
 
   List<StockInfo> _watchlist = [];
   final Map<String, StockQuote> _quotes = {};
@@ -60,10 +62,19 @@ class WatchlistProvider extends ChangeNotifier {
     return _analysisResults[code];
   }
 
-  /// 加载自选股
+  /// 加载自选股（本地优先，本地为空时尝试从云端恢复）
   Future<void> loadWatchlist() async {
+    // 加载 COS 凭证（用于自选股云备份）
+    await _loadCosAuth();
+
     _watchlist = await _storage.getWatchlist();
     _heldStocks = await _storage.getHeldStocks();
+
+    // 本地无数据时尝试从 COS 恢复
+    if (_watchlist.isEmpty) {
+      await _restoreFromCloud();
+    }
+
     notifyListeners();
 
     // 恢复已买入股票的定时刷新
@@ -78,11 +89,63 @@ class WatchlistProvider extends ChangeNotifier {
     }
   }
 
+  /// 从 Hive 加载 COS 凭证并配置到上传服务
+  Future<void> _loadCosAuth() async {
+    final secretId = await _storage.getCosSecretId();
+    final secretKey = await _storage.getCosSecretKey();
+    if (secretId.isNotEmpty && secretKey.isNotEmpty) {
+      _cos.configureAuth(secretId, secretKey);
+    }
+  }
+
+  /// 重新加载 COS 凭证（在设置页面修改凭证后调用）
+  Future<void> reloadCosAuth() async {
+    await _loadCosAuth();
+  }
+
+  /// 从 COS 恢复自选股
+  Future<void> _restoreFromCloud() async {
+    try {
+      final backup = await _cos.fetchWatchlistBackup();
+      if (backup == null) return;
+      final stocks = backup['stocks'] as List?;
+      if (stocks == null || stocks.isEmpty) return;
+      for (final s in stocks) {
+        final stock = StockInfo(
+          code: s['code'] as String? ?? '',
+          name: s['name'] as String? ?? '',
+          market: s['market'] as String? ?? 'SH',
+        );
+        if (stock.code.isNotEmpty) {
+          await _storage.addToWatchlist(stock);
+          _watchlist.add(stock);
+        }
+      }
+      if (stocks!.isNotEmpty) {
+        debugPrint('已从云端恢复 ${stocks.length} 只自选股');
+      }
+    } catch (_) {}
+  }
+
+  /// 备份自选股到 COS
+  Future<void> _backupToCloud() async {
+    if (_watchlist.isEmpty) return;
+    try {
+      await _cos.uploadWatchlistBackup({
+        'version': 1,
+        'stocks': _watchlist.map((s) => {
+          'code': s.code, 'name': s.name, 'market': s.market,
+        }).toList(),
+      });
+    } catch (_) {}
+  }
+
   /// 添加自选
   Future<void> add(StockInfo stock) async {
     await _storage.addToWatchlist(stock);
     _watchlist.add(stock);
     notifyListeners();
+    _backupToCloud();
 
     // 立即拉取行情和分析
     try {
@@ -103,6 +166,7 @@ class WatchlistProvider extends ChangeNotifier {
     _pcAlertService.clearCooldown(stock.code);
     _unholdStock(stock.code);
     notifyListeners();
+    _backupToCloud();
   }
 
   /// 检查是否已自选
@@ -249,8 +313,9 @@ class WatchlistProvider extends ChangeNotifier {
   Future<int> importFromJsonString(String jsonString) async {
     try {
       // 解析 JSON
-      final List<dynamic> items =
-          const JsonDecoder().convert(jsonString) as List<dynamic>;
+      final decoded = const JsonDecoder().convert(jsonString);
+      if (decoded is! List) return -1;
+      final List<dynamic> items = decoded;
       final stocks = <StockInfo>[];
       for (final item in items) {
         final code = item['code'] as String;
@@ -324,10 +389,20 @@ class WatchlistProvider extends ChangeNotifier {
         );
       } catch (_) {}
 
-      // 当PC端有该股票的完整评级数据时，跳过本地分析引擎
-      // 直接用PC端数据作为分析结果
+      // 无论PC端是否有覆盖，都运行本地分析引擎保持分析结果新鲜
+      // 这样 StockCard 展示的分析数据（评级、信号等）始终是最新的
+      try {
+        final klineData = await _api.getKLineData(stock.code, stock.market, count: 60);
+        if (klineData.length >= 20) {
+          final config = await _storage.getStrategyConfig();
+          final engine = AnalysisEngine(config: config);
+          final result = engine.analyze(quote: quote, klineData: klineData);
+          _analysisResults[stock.code] = result;
+        }
+      } catch (_) {}
+
+      // 当PC端有该股票的完整评级数据时，同步PC评级到分析结果
       if (_pcRecommendations.containsKey(stock.code)) {
-        // PC端数据已覆盖，只需做价格触达通知
         final pcRec = _pcRecommendations[stock.code]!;
         if (_heldStocks.contains(stock.code)) {
           _checkPCPriceAlert(stock.name, stock.code, quote.currentPrice, pcRec);
@@ -337,21 +412,17 @@ class WatchlistProvider extends ChangeNotifier {
         return;
       }
 
-      // 无PC数据时，使用本地分析引擎（降级方案）
-      final klineData = await _api.getKLineData(stock.code, stock.market, count: 60);
-      if (klineData.length >= 20) {
+      // 无PC数据时，使用分析引擎结果做信号通知
+      if (_analysisResults.containsKey(stock.code)) {
+        final result = _analysisResults[stock.code]!;
         final config = await _storage.getStrategyConfig();
-        final engine = AnalysisEngine(config: config);
-        final result = engine.analyze(quote: quote, klineData: klineData);
-        _analysisResults[stock.code] = result;
-        // 更新今日快照
-        _archiveTodaySnapshot();
         // 发送信号通知（仅已买入股票）
         _checkNotification(stock.name, stock.code, result, config);
         // 发送价格触达通知（已买入：止损止盈；不发送买入区间）
         _checkPriceAlert(stock.name, stock.code, quote.currentPrice, result, config);
-        notifyListeners();
       }
+      _archiveTodaySnapshot();
+      notifyListeners();
     } catch (_) {}
   }
 

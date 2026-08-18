@@ -75,15 +75,6 @@ class PcAlertService {
           message: '当前价 $currentPrice 达到第一目标价 ${target1.toDouble()}',
         );
       }
-      final target2 = pcRecommendation['target_2'] as num?;
-      if (target2 != null && currentPrice >= target2.toDouble()) {
-        await _fireAlert(
-          code: code, name: name,
-          alertType: 'take_profit_2',
-          title: '目标价2触及',
-          message: '当前价 $currentPrice 达到第二目标价 ${target2.toDouble()}',
-        );
-      }
     }
 
     // 检查涨幅异常（无论是否持仓）

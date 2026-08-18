@@ -32,6 +32,9 @@ dependencies:
   # 编码转换（腾讯API使用GBK编码）
   enough_convert: ^1.6.0
 
+  # COS 签名认证
+  crypto: ^3.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

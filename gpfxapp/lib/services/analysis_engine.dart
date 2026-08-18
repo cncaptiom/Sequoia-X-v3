@@ -14,6 +14,8 @@ class AnalysisEngine {
     required StockQuote quote,
     required List<KLineData> klineData,
   }) {
+    // 确保数据量足够所有均线计算（含前后值比较）
+    // maLong 是最大周期，额外 +5 确保均线前值可用
     if (klineData.length < config.maLong) {
       return AnalysisResult(
         rating: Rating.attention,
@@ -145,7 +147,7 @@ class AnalysisEngine {
         : null;
 
     // ===== 综合评级 =====
-    final rating = _calculateRating(trendPassed, totalScore, riskReward);
+    final rating = _calculateRating(trendPassed, totalScore);
 
     return AnalysisResult(
       rating: rating,
@@ -194,8 +196,8 @@ class AnalysisEngine {
       ));
     }
 
-    // 条件2：MA20方向向上
-    final ma20Prev = mas.length > 20 ? _calcMA(closes, 20)[mas.length - 21] : 0.0;
+    // 条件2：MA20方向向上（需至少40根K线才能得到有效的MA20前值）
+    final ma20Prev = closes.length >= 40 ? _calcMA(closes, 20)[closes.length - 21] : ma20;
     if (ma20 > ma20Prev) {
       conditions.add('MA20上翘 ✓');
     } else {
@@ -518,6 +520,7 @@ class AnalysisEngine {
     final trendScore = (lastClose - currentEma) / currentAtr;
 
     // EMA斜率（判断趋势方向）
+    if (prevEma.abs() < 1e-10) return _StrategyResult(score: 0, signals: signals);
     final emaSlope = (currentEma - prevEma) / prevEma;
 
     // 方向判定
@@ -1047,12 +1050,19 @@ class AnalysisEngine {
     return max(q3, currentPrice * 1.03);
   }
 
-  Rating _calculateRating(bool trendPassed, double score, double riskReward) {
-    if (!trendPassed) return Rating.avoid;
-    if (score >= 6 && riskReward > 3) return Rating.strongBuy;
-    if (score >= 4 && riskReward > 2) return Rating.buy;
-    if (score >= 2) return Rating.watch;
-    return Rating.attention;
+  Rating _calculateRating(bool trendPassed, double score) {
+    // 软过滤：趋势不过时评级上限降级（最高 watch），不直接丢弃评分
+    if (!trendPassed) {
+      if (score >= 0.5) return Rating.watch;
+      if (score >= 0) return Rating.attention;
+      return Rating.avoid;
+    }
+    // 阈值对齐全市场评分分布（与 PC 端一致）
+    if (score >= 1.5) return Rating.strongBuy;
+    if (score >= 1.0) return Rating.buy;
+    if (score >= 0.5) return Rating.watch;
+    if (score >= 0) return Rating.attention;
+    return Rating.avoid;
   }
 }
 

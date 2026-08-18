@@ -186,6 +186,22 @@ class StorageService {
     await Hive.box(_settingsBox).put('cosRegion', region);
   }
 
+  Future<String> getCosSecretId() async {
+    return Hive.box(_settingsBox).get('cosSecretId', defaultValue: '') as String;
+  }
+
+  Future<void> setCosSecretId(String id) async {
+    await Hive.box(_settingsBox).put('cosSecretId', id);
+  }
+
+  Future<String> getCosSecretKey() async {
+    return Hive.box(_settingsBox).get('cosSecretKey', defaultValue: '') as String;
+  }
+
+  Future<void> setCosSecretKey(String key) async {
+    await Hive.box(_settingsBox).put('cosSecretKey', key);
+  }
+
   Future<bool> getCosEnabled() async {
     return Hive.box(_settingsBox).get('cosEnabled', defaultValue: true) as bool;
   }

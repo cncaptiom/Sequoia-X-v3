@@ -68,6 +68,9 @@ class StrategyConfig {
   final int kdjDPeriod;
   final int kdjJPeriod;
 
+  /// 基本面因子策略
+  final bool fundamentalEnabled;
+
   /// 策略权重（从PC端动态同步，手机端本地分析使用）
   final double weightMaVolume;
   final double weightTurtleTrade;
@@ -77,6 +80,7 @@ class StrategyConfig {
   final double weightMacdRsi;
   final double weightMaCross;
   final double weightKdj;
+  final double weightFundamental;
 
   /// 趋势过滤
   final bool trendFilterEnabled;
@@ -94,7 +98,7 @@ class StrategyConfig {
   final bool notifyTakeProfit;
 
   const StrategyConfig({
-    this.maVolumeEnabled = true,
+    this.maVolumeEnabled = false,  // 回测确认：48种参数组合全部负收益
     this.maShort = 5,
     this.maLong = 20,
     this.volumeThreshold = 1.5,
@@ -105,7 +109,7 @@ class StrategyConfig {
     this.rsiPeriod = 14,
     this.rsiOverbought = 70,
     this.rsiOversold = 30,
-    this.volumePriceEnabled = true,
+    this.volumePriceEnabled = false,  // 回测确认：IR为负、换手率高
     this.volumeSurgeThreshold = 3.0,
     this.trendFilterEnabled = true,
     this.maCrossEnabled = true,
@@ -113,14 +117,16 @@ class StrategyConfig {
     this.kdjKPeriod = 9,
     this.kdjDPeriod = 3,
     this.kdjJPeriod = 3,
-    this.weightMaVolume = 0.13,
-    this.weightTurtleTrade = 0.12,
-    this.weightMeanReversion = 0.13,
-    this.weightVolumePrice = 0.12,
-    this.weightAtrChannel = 0.12,
-    this.weightMacdRsi = 0.13,
-    this.weightMaCross = 0.13,
-    this.weightKdj = 0.12,
+    this.fundamentalEnabled = true,
+    this.weightMaVolume = 0.0,
+    this.weightTurtleTrade = 0.1667,
+    this.weightMeanReversion = 0.1667,
+    this.weightVolumePrice = 0.0,
+    this.weightAtrChannel = 0.1667,
+    this.weightMacdRsi = 0.0,
+    this.weightMaCross = 0.1667,
+    this.weightKdj = 0.1667,
+    this.weightFundamental = 0.1667,
     this.defaultStyle = TradingStyle.aggressive,
     this.notificationEnabled = true,
     this.notifyGoldenCross = true,
@@ -170,6 +176,7 @@ class StrategyConfig {
         'kdjKPeriod': kdjKPeriod,
         'kdjDPeriod': kdjDPeriod,
         'kdjJPeriod': kdjJPeriod,
+        'fundamentalEnabled': fundamentalEnabled,
         'weightMaVolume': weightMaVolume,
         'weightTurtleTrade': weightTurtleTrade,
         'weightMeanReversion': weightMeanReversion,
@@ -178,6 +185,7 @@ class StrategyConfig {
         'weightMacdRsi': weightMacdRsi,
         'weightMaCross': weightMaCross,
         'weightKdj': weightKdj,
+        'weightFundamental': weightFundamental,
         'defaultStyle': defaultStyle.name,
       };
 
@@ -214,14 +222,16 @@ class StrategyConfig {
         kdjKPeriod: json['kdjKPeriod'] as int? ?? 9,
         kdjDPeriod: json['kdjDPeriod'] as int? ?? 3,
         kdjJPeriod: json['kdjJPeriod'] as int? ?? 3,
-        weightMaVolume: (json['weightMaVolume'] as num?)?.toDouble() ?? 0.18,
-        weightTurtleTrade: (json['weightTurtleTrade'] as num?)?.toDouble() ?? 0.05,
-        weightMeanReversion: (json['weightMeanReversion'] as num?)?.toDouble() ?? 0.20,
-        weightVolumePrice: (json['weightVolumePrice'] as num?)?.toDouble() ?? 0.15,
-        weightAtrChannel: (json['weightAtrChannel'] as num?)?.toDouble() ?? 0.12,
-        weightMacdRsi: (json['weightMacdRsi'] as num?)?.toDouble() ?? 0.09,
-        weightMaCross: (json['weightMaCross'] as num?)?.toDouble() ?? 0.11,
-        weightKdj: (json['weightKdj'] as num?)?.toDouble() ?? 0.06,
+        fundamentalEnabled: json['fundamentalEnabled'] as bool? ?? true,
+        weightMaVolume: (json['weightMaVolume'] as num?)?.toDouble() ?? 0.0,
+        weightTurtleTrade: (json['weightTurtleTrade'] as num?)?.toDouble() ?? 0.1667,
+        weightMeanReversion: (json['weightMeanReversion'] as num?)?.toDouble() ?? 0.1667,
+        weightVolumePrice: (json['weightVolumePrice'] as num?)?.toDouble() ?? 0.0,
+        weightAtrChannel: (json['weightAtrChannel'] as num?)?.toDouble() ?? 0.1667,
+        weightMacdRsi: (json['weightMacdRsi'] as num?)?.toDouble() ?? 0.0,
+        weightMaCross: (json['weightMaCross'] as num?)?.toDouble() ?? 0.1667,
+        weightKdj: (json['weightKdj'] as num?)?.toDouble() ?? 0.1667,
+        weightFundamental: (json['weightFundamental'] as num?)?.toDouble() ?? 0.1667,
         defaultStyle: json['defaultStyle'] != null
             ? TradingStyle.values.firstWhere((e) => e.name == json['defaultStyle'],
                 orElse: () => TradingStyle.aggressive)
@@ -258,6 +268,7 @@ class StrategyConfig {
     int? kdjKPeriod,
     int? kdjDPeriod,
     int? kdjJPeriod,
+    bool? fundamentalEnabled,
     double? weightMaVolume,
     double? weightTurtleTrade,
     double? weightMeanReversion,
@@ -266,6 +277,7 @@ class StrategyConfig {
     double? weightMacdRsi,
     double? weightMaCross,
     double? weightKdj,
+    double? weightFundamental,
     bool? notifyBuyZone,
     bool? notifyStopLoss,
     bool? notifyTakeProfit,
@@ -301,6 +313,7 @@ class StrategyConfig {
       kdjKPeriod: kdjKPeriod ?? this.kdjKPeriod,
       kdjDPeriod: kdjDPeriod ?? this.kdjDPeriod,
       kdjJPeriod: kdjJPeriod ?? this.kdjJPeriod,
+      fundamentalEnabled: fundamentalEnabled ?? this.fundamentalEnabled,
       weightMaVolume: weightMaVolume ?? this.weightMaVolume,
       weightTurtleTrade: weightTurtleTrade ?? this.weightTurtleTrade,
       weightMeanReversion: weightMeanReversion ?? this.weightMeanReversion,
@@ -309,6 +322,7 @@ class StrategyConfig {
       weightMacdRsi: weightMacdRsi ?? this.weightMacdRsi,
       weightMaCross: weightMaCross ?? this.weightMaCross,
       weightKdj: weightKdj ?? this.weightKdj,
+      weightFundamental: weightFundamental ?? this.weightFundamental,
       notifyBuyZone: notifyBuyZone ?? this.notifyBuyZone,
       notifyStopLoss: notifyStopLoss ?? this.notifyStopLoss,
       notifyTakeProfit: notifyTakeProfit ?? this.notifyTakeProfit,

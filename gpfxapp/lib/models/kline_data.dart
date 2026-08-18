@@ -36,8 +36,10 @@ class KLineData {
   /// 新浪财经K线API (vip.stock.finance.sina.com.cn)
   /// 格式: {"day":"2026-05-27","open":"1287.000","high":"1304.790","low":"1277.000","close":"1285.880","volume":"4635276"}
   factory KLineData.fromSina(Map<String, dynamic> data) {
+    final dayStr = data['day']?.toString();
+    if (dayStr == null || dayStr.isEmpty) throw FormatException('K线缺失日期');
     return KLineData(
-      date: DateTime.parse(data['day']?.toString() ?? ''),
+      date: DateTime.parse(dayStr),
       open: double.tryParse(data['open']?.toString() ?? '0') ?? 0,
       high: double.tryParse(data['high']?.toString() ?? '0') ?? 0,
       low: double.tryParse(data['low']?.toString() ?? '0') ?? 0,

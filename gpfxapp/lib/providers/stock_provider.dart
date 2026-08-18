@@ -52,6 +52,9 @@ class StockProvider extends ChangeNotifier {
   bool _isLoading = false;
   String? _error;
 
+  // dispose 保护
+  bool _disposed = false;
+
   // Getters
   StockInfo? get currentStock => _currentStock;
   StockQuote? get currentQuote => _currentQuote;
@@ -292,6 +295,7 @@ class StockProvider extends ChangeNotifier {
   void _startDetailRefresh() {
     _detailRefreshTimer?.cancel();
     _detailRefreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_disposed) return;
       if (_isMarketOpen() && _currentStock != null) {
         refreshCurrentQuote();
       }
@@ -379,6 +383,7 @@ class StockProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     stopAutoRefresh();
     stopDetailRefresh();
     super.dispose();

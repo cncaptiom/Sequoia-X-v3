@@ -257,6 +257,11 @@ class SettingsPage extends StatelessWidget {
 
           const SizedBox(height: 12),
 
+          // COS鉴权配置
+          _CosAuthSection(),
+
+          const SizedBox(height: 12),
+
           // 测试通知
           Container(
             margin: const EdgeInsets.symmetric(vertical: 8),
@@ -300,6 +305,108 @@ class SettingsPage extends StatelessWidget {
       title: Text(title),
       subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
       trailing: Switch(value: value, activeColor: AppTheme.primaryDark, onChanged: onChanged),
+    );
+  }
+}
+
+/// COS 鉴权配置卡片
+class _CosAuthSection extends StatelessWidget {
+  const _CosAuthSection();
+
+  String _maskSecret(PcDataProvider p, {required bool isId}) {
+    final s = isId ? p.cosSecretId : p.cosSecretKey;
+    if (s.isEmpty) return '未配置，自选股云备份将不可用';
+    if (s.length <= 8) return '${s.substring(0, 2)}****';
+    return '${s.substring(0, 4)}****${s.substring(s.length - 4)}';
+  }
+
+  Future<void> _editCredential(BuildContext context, {required bool isId}) async {
+    final pcProvider = context.read<PcDataProvider>();
+    final current = isId ? pcProvider.cosSecretId : pcProvider.cosSecretKey;
+    final label = isId ? 'SecretId' : 'SecretKey';
+    final hint = isId ? '请输入腾讯云COS SecretId' : '请输入腾讯云COS SecretKey';
+    final controller = TextEditingController(text: current);
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('编辑 $label'),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(hintText: hint),
+          obscureText: !isId,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (result == null || result == current) return;
+
+    final storage = StorageService();
+    if (isId) {
+      await storage.setCosSecretId(result);
+    } else {
+      await storage.setCosSecretKey(result);
+    }
+    pcProvider.updateCosAuth();
+    // 同步更新 WatchlistProvider 的 COS 凭证（用于自选股云备份）
+    if (context.mounted) {
+      context.read<WatchlistProvider>().reloadCosAuth();
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$label 已更新'), duration: const Duration(seconds: 2)),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Row(
+              children: [
+                Icon(Icons.cloud, size: 20, color: AppTheme.primaryDark),
+                SizedBox(width: 8),
+                Text('云存储配置', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+          Consumer<PcDataProvider>(
+            builder: (context, pc, _) => Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.key, color: AppTheme.primaryDark),
+                  title: const Text('COS SecretId'),
+                  subtitle: Text(_maskSecret(pc, isId: true), style: const TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.edit, size: 18),
+                  onTap: () => _editCredential(context, isId: true),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.lock, color: AppTheme.primaryDark),
+                  title: const Text('COS SecretKey'),
+                  subtitle: Text(_maskSecret(pc, isId: false), style: const TextStyle(fontSize: 12)),
+                  trailing: const Icon(Icons.edit, size: 18),
+                  onTap: () => _editCredential(context, isId: false),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -283,11 +283,10 @@ class HomePage extends StatelessWidget {
 
   /// PC端推荐卡片（含实时操作信号 + 详细数据）
   Widget _buildPcStockCard(BuildContext context, dynamic pick, dynamic pcProvider) {
-    final isStrongBuy = pick.rating == "strong_buy";
-    final isBuy = pick.rating == "buy";
-    final labelColor = isStrongBuy
+    final score = (pick.totalScore as num?)?.toDouble() ?? 0;
+    final labelColor = score >= 1.5
         ? AppTheme.signalBuy
-        : isBuy ? const Color(0xFFFF6B35) : AppTheme.textSecondary;
+        : score >= 1.0 ? const Color(0xFFFF6B35) : AppTheme.textSecondary;
 
     // 置信度等级（阈值基于全市场评分分布校准）
     // S: 前0.2% (>=1.5分), A: 前7% (>=1.0分), B: 前28% (>=0.5分), C: 其余
@@ -331,21 +330,21 @@ class HomePage extends StatelessWidget {
             entryHigh = double.tryParse(parts[1]) ?? 0;
 
             if (currentPrice > 0 && entryLow > 0) {
-              if (currentPrice >= entryLow && currentPrice <= entryHigh) {
-                actionText = '买入';
-                actionColor = AppTheme.signalBuy;  // 红色
-              } else if (currentPrice < entryLow && currentPrice >= entryLow * 0.95) {
-                actionText = '关注';
-                actionColor = AppTheme.signalWatch;
-              } else if (currentPrice < entryLow * 0.95) {
-                actionText = '观望';
-                actionColor = AppTheme.textHint;
-              } else if (currentPrice <= entryHigh * 1.05) {
-                actionText = '轻仓';
-                actionColor = AppTheme.signalHold;
+              final regime = pcProvider.marketRegimeLabel;
+              final isTop = score >= 1.0;
+              final allowBuy = regime.contains('强牛') || regime.contains('弱牛');
+              final allowAttention = !regime.contains('强熊');
+
+              if (currentPrice <= entryHigh) {
+                if (isTop && allowBuy) {
+                  actionText = '关注'; actionColor = AppTheme.signalHold;
+                } else if (allowAttention) {
+                  actionText = '关注'; actionColor = AppTheme.signalHold;
+                } else {
+                  actionText = '等待'; actionColor = AppTheme.textHint;
+                }
               } else {
-                actionText = '等待';
-                actionColor = AppTheme.textHint;
+                actionText = '等待'; actionColor = AppTheme.textHint;
               }
               final midPrice = (entryLow + entryHigh) / 2;
               final deviation = midPrice > 0 ? ((currentPrice - midPrice) / midPrice * 100) : 0;
@@ -401,9 +400,7 @@ class HomePage extends StatelessWidget {
                     ),
                     child: Text(level, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: levelColor)),
                   ),
-                  const SizedBox(width: 6),
-                  Text(pick.ratingLabel,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: labelColor)),
+
                 ],
               ),
               const SizedBox(height: 6),
