@@ -2,16 +2,28 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/analysis_result.dart';
 
-class AnalysisSection extends StatelessWidget {
+/// 技术分析详情（默认折叠，减少详情页信息过载）。
+/// 策略概览已展示各策略得分，此区为深度明细：止损止盈、盈亏比、信号列表。
+class AnalysisSection extends StatefulWidget {
   final AnalysisResult analysis;
+  final bool initiallyExpanded;
 
-  const AnalysisSection({super.key, required this.analysis});
+  const AnalysisSection({
+    super.key,
+    required this.analysis,
+    this.initiallyExpanded = false,
+  });
 
   @override
+  State<AnalysisSection> createState() => _AnalysisSectionState();
+}
+
+class _AnalysisSectionState extends State<AnalysisSection> {
+  @override
   Widget build(BuildContext context) {
+    final analysis = widget.analysis;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -19,60 +31,57 @@ class AnalysisSection extends StatelessWidget {
           BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.analytics, size: 16, color: AppTheme.primaryDark),
-              SizedBox(width: 6),
-              Text('技术分析详情',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // 各策略得分
-          ...analysis.strategyScores.entries
-              .map((entry) => _buildStrategyScore(entry.key, entry.value)),
-
-          const SizedBox(height: 12),
-
-          // 趋势信息
-          _buildInfoRow('趋势判断', analysis.trendDescription),
-
-          // 盈亏比
-          if (analysis.riskRewardRatio > 0) ...[
-            const SizedBox(height: 6),
-            _buildInfoRow(
-                '盈亏比', '${analysis.riskRewardRatio.toStringAsFixed(2)} : 1'),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: ExpansionTile(
+          shape: const Border(),
+          collapsedShape: const Border(),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          leading: const Icon(Icons.analytics,
+              size: 16, color: AppTheme.primaryDark),
+          title: const Text('技术分析详情',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+          initiallyExpanded: widget.initiallyExpanded,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ...analysis.strategyScores.entries.map(
+                    (entry) => _buildStrategyScore(entry.key, entry.value)),
+                const SizedBox(height: 12),
+                _buildInfoRow('趋势判断', analysis.trendDescription),
+                if (analysis.riskRewardRatio > 0) ...[
+                  const SizedBox(height: 6),
+                  _buildInfoRow('盈亏比',
+                      '${analysis.riskRewardRatio.toStringAsFixed(2)} : 1'),
+                ],
+                if (analysis.stopLossPrice != null) ...[
+                  const SizedBox(height: 6),
+                  _buildInfoRow(
+                      '止损位', analysis.stopLossPrice!.toStringAsFixed(2)),
+                ],
+                if (analysis.takeProfitPrice != null) ...[
+                  const SizedBox(height: 6),
+                  _buildInfoRow(
+                      '止盈位', analysis.takeProfitPrice!.toStringAsFixed(2)),
+                ],
+                if (analysis.buyRange != null) ...[
+                  const SizedBox(height: 6),
+                  _buildInfoRow('买入区间', analysis.buyRange!),
+                ],
+                const SizedBox(height: 12),
+                const Text('信号明细',
+                    style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500)),
+                const SizedBox(height: 8),
+                ...analysis.signals.map((signal) => _buildSignalItem(signal)),
+              ],
+            ),
           ],
-
-          // 止损止盈
-          if (analysis.stopLossPrice != null) ...[
-            const SizedBox(height: 6),
-            _buildInfoRow('止损位', analysis.stopLossPrice!.toStringAsFixed(2)),
-          ],
-          if (analysis.takeProfitPrice != null) ...[
-            const SizedBox(height: 6),
-            _buildInfoRow('止盈位', analysis.takeProfitPrice!.toStringAsFixed(2)),
-          ],
-          if (analysis.buyRange != null) ...[
-            const SizedBox(height: 6),
-            _buildInfoRow('买入区间', analysis.buyRange!),
-          ],
-
-          const SizedBox(height: 12),
-
-          // 信号列表
-          const Text('信号明细',
-              style: TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(height: 8),
-          ...analysis.signals.map((signal) => _buildSignalItem(signal)),
-        ],
+        ),
       ),
     );
   }

@@ -8,10 +8,8 @@ import '../providers/position_provider.dart';
 import '../models/position.dart';
 import '../models/analysis_result.dart';
 import '../services/order_suggestion_service.dart';
-import '../models/strategy_config.dart';
 import '../widgets/kline_chart.dart';
 import '../widgets/analysis_section.dart';
-import '../widgets/signal_badge.dart';
 import '../models/stock_info.dart';
 import '../providers/pc_data_provider.dart';
 
@@ -406,102 +404,6 @@ class StockDetailPage extends StatelessWidget {
   }
 
   // ═══════════════════════════════════════════
-  // PC端分析及建议（详细评分、买入区间、策略分解）
-  // ═══════════════════════════════════════════
-
-  Widget _buildPcAnalysisCard(dynamic pcRating, {required dynamic analysis}) {
-    final bool hasPc = pcRating != null;
-    final String stars = hasPc
-        ? (pcRating.ratingStars as String? ?? '')
-        : (analysis?.ratingStars ?? '');
-    final String label = hasPc
-        ? (pcRating.ratingLabel as String? ?? '')
-        : (analysis?.ratingLabel ?? '');
-    final double score = hasPc
-        ? ((pcRating.totalScore as num?)?.toDouble() ?? 0)
-        : (analysis?.totalScore ?? 0);
-    final double rr = hasPc
-        ? ((pcRating.riskRewardRatio as num?)?.toDouble() ?? 0)
-        : (analysis?.riskRewardRatio ?? 0);
-    final String trendDesc = hasPc
-        ? (pcRating.trendDescription as String? ?? '')
-        : (analysis?.trendDescription ?? '');
-
-    Color ratingColor;
-    if (score >= 1.5) {
-      ratingColor = const Color(0xFF1B5E20);
-    } else if (score >= 1.0) {
-      ratingColor = const Color(0xFF4CAF50);
-    } else {
-      ratingColor = const Color(0xFF999999);
-    }
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: ratingColor.withOpacity(0.25), width: 1),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6)
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 标题
-          Row(
-            children: [
-              const Icon(Icons.computer, size: 18, color: Color(0xFF1565C0)),
-              const SizedBox(width: 6),
-              const Text('PC端分析',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-              const Spacer(),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          // 评分 + 盈亏比 + 买入区间
-          Row(
-            children: [
-              Text('${score.toStringAsFixed(1)}分',
-                  style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w600)),
-              if (rr > 0) ...[
-                const SizedBox(width: 12),
-                Text('盈亏比 ${rr.toStringAsFixed(1)}:1',
-                    style: const TextStyle(
-                        fontSize: 12, color: AppTheme.textHint)),
-              ],
-            ],
-          ),
-          const SizedBox(height: 6),
-
-          // 趋势判断
-          if (trendDesc.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const Icon(Icons.trending_up,
-                    size: 14, color: AppTheme.textHint),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(trendDesc,
-                      style: const TextStyle(
-                          fontSize: 11, color: AppTheme.textSecondary),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // ═══════════════════════════════════════════
   // 综合决策卡（合并评级 + 操盘建议 + 止损止盈）
   // ═══════════════════════════════════════════
 
@@ -548,7 +450,6 @@ class StockDetailPage extends StatelessWidget {
     // 评级判定（用评分阈值代替字符串匹配，对齐全市场评分分布）
     // S: >=1.5(前0.2%)  A: >=1.0(前7%)  B: >=0.5(前28%)
     bool isTop = score >= 1.0; // 前7%的股票
-    bool isGood = score >= 0.5; // 前28%
     bool isAvoid = ratingStr == 'avoid';
     // S/A/B/C 颜色对齐全站（红=强买入、橙=买入、琥珀=持有、灰=普通），S级醒目区分于A级
     Color ratingColor;
@@ -1298,7 +1199,6 @@ class StockDetailPage extends StatelessWidget {
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -1306,25 +1206,29 @@ class StockDetailPage extends StatelessWidget {
           BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.assignment,
-                  size: 18, color: AppTheme.primaryDark),
-              const SizedBox(width: 6),
-              Text('条件单建议 · ${style.label}',
-                  style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w600)),
-              const Spacer(),
-              Text('招商证券',
-                  style: TextStyle(fontSize: 11, color: AppTheme.textHint)),
-            ],
-          ),
-          const SizedBox(height: 8),
-          ...suggestions.map((s) => _buildSuggestionTile(context, s)),
-        ],
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: ExpansionTile(
+          shape: const Border(),
+          collapsedShape: const Border(),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          leading: const Icon(Icons.assignment,
+              size: 18, color: AppTheme.primaryDark),
+          title: Text('条件单建议 · ${style.label}',
+              style:
+                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          subtitle: const Text('招商证券',
+              style: TextStyle(fontSize: 11, color: AppTheme.textHint)),
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ...suggestions.map((s) => _buildSuggestionTile(context, s)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
