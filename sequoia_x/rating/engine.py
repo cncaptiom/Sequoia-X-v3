@@ -250,6 +250,7 @@ class RatingConfig:
             "kdjKPeriod": self.kdj_k_period,
             "kdjDPeriod": self.kdj_d_period,
             "kdjJPeriod": self.kdj_j_period,
+            "fundamentalEnabled": self.fundamental_enabled,
             "trendFilterEnabled": self.trend_filter_enabled,
             "weightMaVolume": self.weight_ma_volume,
             "weightTurtleTrade": self.weight_turtle_trade,

@@ -98,7 +98,7 @@ class StrategyConfig {
   final bool notifyTakeProfit;
 
   const StrategyConfig({
-    this.maVolumeEnabled = false,  // 回测确认：48种参数组合全部负收益
+    this.maVolumeEnabled = false, // 回测确认：48种参数组合全部负收益
     this.maShort = 5,
     this.maLong = 20,
     this.volumeThreshold = 1.5,
@@ -109,7 +109,7 @@ class StrategyConfig {
     this.rsiPeriod = 14,
     this.rsiOverbought = 70,
     this.rsiOversold = 30,
-    this.volumePriceEnabled = false,  // 回测确认：IR为负、换手率高
+    this.volumePriceEnabled = false, // 回测确认：IR为负、换手率高
     this.volumeSurgeThreshold = 3.0,
     this.trendFilterEnabled = true,
     this.maCrossEnabled = true,
@@ -190,7 +190,7 @@ class StrategyConfig {
       };
 
   factory StrategyConfig.fromJson(Map<String, dynamic> json) => StrategyConfig(
-        maVolumeEnabled: json['maVolumeEnabled'] as bool? ?? true,
+        maVolumeEnabled: json['maVolumeEnabled'] as bool? ?? false,
         maShort: json['maShort'] as int? ?? 5,
         maLong: json['maLong'] as int? ?? 20,
         volumeThreshold: (json['volumeThreshold'] as num?)?.toDouble() ?? 1.5,
@@ -201,8 +201,9 @@ class StrategyConfig {
         rsiPeriod: json['rsiPeriod'] as int? ?? 14,
         rsiOverbought: (json['rsiOverbought'] as num?)?.toDouble() ?? 70,
         rsiOversold: (json['rsiOversold'] as num?)?.toDouble() ?? 30,
-        volumePriceEnabled: json['volumePriceEnabled'] as bool? ?? true,
-        volumeSurgeThreshold: (json['volumeSurgeThreshold'] as num?)?.toDouble() ?? 3.0,
+        volumePriceEnabled: json['volumePriceEnabled'] as bool? ?? false,
+        volumeSurgeThreshold:
+            (json['volumeSurgeThreshold'] as num?)?.toDouble() ?? 3.0,
         trendFilterEnabled: json['trendFilterEnabled'] as bool? ?? true,
         notificationEnabled: json['notificationEnabled'] as bool? ?? true,
         notifyGoldenCross: json['notifyGoldenCross'] as bool? ?? true,
@@ -224,16 +225,22 @@ class StrategyConfig {
         kdjJPeriod: json['kdjJPeriod'] as int? ?? 3,
         fundamentalEnabled: json['fundamentalEnabled'] as bool? ?? true,
         weightMaVolume: (json['weightMaVolume'] as num?)?.toDouble() ?? 0.0,
-        weightTurtleTrade: (json['weightTurtleTrade'] as num?)?.toDouble() ?? 0.1667,
-        weightMeanReversion: (json['weightMeanReversion'] as num?)?.toDouble() ?? 0.1667,
-        weightVolumePrice: (json['weightVolumePrice'] as num?)?.toDouble() ?? 0.0,
-        weightAtrChannel: (json['weightAtrChannel'] as num?)?.toDouble() ?? 0.1667,
+        weightTurtleTrade:
+            (json['weightTurtleTrade'] as num?)?.toDouble() ?? 0.1667,
+        weightMeanReversion:
+            (json['weightMeanReversion'] as num?)?.toDouble() ?? 0.1667,
+        weightVolumePrice:
+            (json['weightVolumePrice'] as num?)?.toDouble() ?? 0.0,
+        weightAtrChannel:
+            (json['weightAtrChannel'] as num?)?.toDouble() ?? 0.1667,
         weightMacdRsi: (json['weightMacdRsi'] as num?)?.toDouble() ?? 0.0,
         weightMaCross: (json['weightMaCross'] as num?)?.toDouble() ?? 0.1667,
         weightKdj: (json['weightKdj'] as num?)?.toDouble() ?? 0.1667,
-        weightFundamental: (json['weightFundamental'] as num?)?.toDouble() ?? 0.1667,
+        weightFundamental:
+            (json['weightFundamental'] as num?)?.toDouble() ?? 0.1667,
         defaultStyle: json['defaultStyle'] != null
-            ? TradingStyle.values.firstWhere((e) => e.name == json['defaultStyle'],
+            ? TradingStyle.values.firstWhere(
+                (e) => e.name == json['defaultStyle'],
                 orElse: () => TradingStyle.aggressive)
             : TradingStyle.aggressive,
       );
