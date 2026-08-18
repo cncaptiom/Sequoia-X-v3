@@ -25,6 +25,12 @@ class AppTheme {
   static const Color signalHold = Color(0xFFFFA726); // 持有-橙
   static const Color signalWatch = Color(0xFF42A5F5); // 观望-蓝
 
+  // 评级等级色（S/A/B/C，全站统一）
+  static const Color gradeS = signalBuy; // S级-红（强买入，A股看多色）
+  static const Color gradeA = Color(0xFFFF6B35); // A级-橙
+  static const Color gradeB = signalHold; // B级-琥珀
+  static const Color gradeC = textHint; // C级-灰
+
   static ThemeData get theme {
     return ThemeData(
       useMaterial3: true,
@@ -76,7 +82,8 @@ class AppTheme {
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: primaryDark, width: 2),
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         hintStyle: const TextStyle(color: textHint),
       ),
       dividerTheme: const DividerThemeData(

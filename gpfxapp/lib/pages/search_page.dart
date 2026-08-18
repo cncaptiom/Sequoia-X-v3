@@ -16,7 +16,8 @@ class SearchPage extends StatefulWidget {
   State<SearchPage> createState() => _SearchPageState();
 }
 
-class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMixin {
+class _SearchPageState extends State<SearchPage>
+    with AutomaticKeepAliveClientMixin {
   final _searchController = TextEditingController();
   int _rankingTab = 0; // 0=涨幅榜, 1=跌幅榜, 2=成交额榜
 
@@ -80,13 +81,14 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
               ),
               textInputAction: TextInputAction.search,
               onChanged: _onSearch,
-              autofocus: true,
             ),
           ),
 
           // 内容区
           Expanded(
-            child: _searchController.text.isNotEmpty ? _buildSearchResults() : _buildDiscovery(),
+            child: _searchController.text.isNotEmpty
+                ? _buildSearchResults()
+                : _buildDiscovery(),
           ),
         ],
       ),
@@ -107,9 +109,11 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.search_off, size: 48, color: AppTheme.textHint.withOpacity(0.5)),
+                Icon(Icons.search_off,
+                    size: 48, color: AppTheme.textHint.withOpacity(0.5)),
                 const SizedBox(height: 12),
-                const Text('未找到匹配的股票', style: TextStyle(color: AppTheme.textSecondary)),
+                const Text('未找到匹配的股票',
+                    style: TextStyle(color: AppTheme.textSecondary)),
               ],
             ),
           );
@@ -147,7 +151,11 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
               children: [
                 Icon(Icons.leaderboard, size: 18, color: AppTheme.primaryDark),
                 SizedBox(width: 6),
-                Text('市场排行', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                Text('市场排行',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary)),
               ],
             ),
             const SizedBox(height: 12),
@@ -174,7 +182,11 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
               children: [
                 Icon(Icons.category, size: 18, color: AppTheme.primaryDark),
                 SizedBox(width: 6),
-                Text('热门板块', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                Text('热门板块',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary)),
               ],
             ),
             const SizedBox(height: 12),
@@ -184,7 +196,9 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
             else if (provider.sectors.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 20),
-                child: Center(child: Text('加载板块中...', style: TextStyle(color: AppTheme.textHint))),
+                child: Center(
+                    child: Text('加载板块中...',
+                        style: TextStyle(color: AppTheme.textHint))),
               )
             else
               _buildSectorGrid(provider.sectors),
@@ -206,7 +220,11 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
           children: [
             Icon(Icons.auto_awesome, size: 18, color: AppTheme.signalBuy),
             SizedBox(width: 6),
-            Text('精选推荐', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+            Text('精选推荐',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary)),
           ],
         ),
         const SizedBox(height: 10),
@@ -219,15 +237,23 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
             itemBuilder: (context, index) {
               final pick = provider.topPicks[index];
               final changeColor = AppTheme.priceColor(pick.quote.changePercent);
-              final isBuy = pick.analysis.rating == Rating.strongBuy || pick.analysis.rating == Rating.buy;
+              final isBuy = pick.analysis.rating == Rating.strongBuy ||
+                  pick.analysis.rating == Rating.buy;
               final labelText = isBuy ? pick.analysis.ratingLabel : '潜力';
-              final badgeColor = isBuy ? AppTheme.signalBuy : AppTheme.signalWatch;
+              final badgeColor =
+                  isBuy ? AppTheme.signalBuy : AppTheme.signalWatch;
               return GestureDetector(
                 onTap: () {
                   final market = pick.quote.market.isNotEmpty
                       ? pick.quote.market
-                      : (pick.quote.code.startsWith('6') || pick.quote.code.startsWith('9') ? 'SH' : 'SZ');
-                  final stock = StockInfo(code: pick.quote.code, name: pick.quote.name, market: market);
+                      : (pick.quote.code.startsWith('6') ||
+                              pick.quote.code.startsWith('9')
+                          ? 'SH'
+                          : 'SZ');
+                  final stock = StockInfo(
+                      code: pick.quote.code,
+                      name: pick.quote.name,
+                      market: market);
                   context.read<StockProvider>().loadStockDetail(stock);
                   widget.onNavigateToDetail?.call();
                 },
@@ -237,28 +263,42 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: isBuy ? AppTheme.signalBuy.withOpacity(0.3) : AppTheme.signalWatch.withOpacity(0.3)),
+                    border: Border.all(
+                        color: isBuy
+                            ? AppTheme.signalBuy.withOpacity(0.3)
+                            : AppTheme.signalWatch.withOpacity(0.3)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(pick.quote.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(pick.quote.name,
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 4),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 1),
                         decoration: BoxDecoration(
                           color: badgeColor.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(3),
                         ),
                         child: Text(
                           labelText,
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: badgeColor),
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: badgeColor),
                         ),
                       ),
                       const Spacer(),
                       Text(
                         pick.quote.changePercentText,
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: changeColor),
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            color: changeColor),
                       ),
                     ],
                   ),
@@ -270,7 +310,9 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
         if (provider.isLoadingTopPicks)
           Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: Text('正在分析更多股票...', style: TextStyle(fontSize: 11, color: AppTheme.textHint.withOpacity(0.7))),
+            child: Text('正在分析更多股票...',
+                style: TextStyle(
+                    fontSize: 11, color: AppTheme.textHint.withOpacity(0.7))),
           ),
       ],
     );
@@ -284,7 +326,11 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
           children: [
             Icon(Icons.auto_awesome, size: 18, color: AppTheme.signalBuy),
             SizedBox(width: 6),
-            Text('精选推荐', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+            Text('精选推荐',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary)),
           ],
         ),
         const SizedBox(height: 10),
@@ -294,9 +340,15 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
                 const SizedBox(width: 8),
-                Text('正在分析涨幅榜...', style: TextStyle(fontSize: 13, color: AppTheme.textHint.withOpacity(0.7))),
+                Text('正在分析涨幅榜...',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: AppTheme.textHint.withOpacity(0.7))),
               ],
             ),
           ),
@@ -313,7 +365,11 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
           children: [
             Icon(Icons.auto_awesome, size: 18, color: AppTheme.signalBuy),
             SizedBox(width: 6),
-            Text('精选推荐', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+            Text('精选推荐',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary)),
           ],
         ),
         const SizedBox(height: 10),
@@ -322,7 +378,8 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
           child: Center(
             child: Text(
               '暂无分析结果（K线数据加载失败）',
-              style: TextStyle(fontSize: 12, color: AppTheme.textHint.withOpacity(0.7)),
+              style: TextStyle(
+                  fontSize: 12, color: AppTheme.textHint.withOpacity(0.7)),
             ),
           ),
         ),
@@ -336,16 +393,22 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
       onTap: () {
         setState(() => _rankingTab = index);
         final provider = context.read<StockProvider>();
-        if (index == 0) provider.loadTopGainers();
-        else if (index == 1) provider.loadTopLosers();
-        else provider.loadVolumeLeaders();
+        if (index == 0)
+          provider.loadTopGainers();
+        else if (index == 1)
+          provider.loadTopLosers();
+        else
+          provider.loadVolumeLeaders();
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: selected ? AppTheme.primaryDark : Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? AppTheme.primaryDark : AppTheme.textHint.withOpacity(0.3)),
+          border: Border.all(
+              color: selected
+                  ? AppTheme.primaryDark
+                  : AppTheme.textHint.withOpacity(0.3)),
         ),
         child: Text(
           label,
@@ -360,12 +423,15 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
   }
 
   Widget _buildRankingList(StockProvider provider) {
-    final list = _rankingTab == 0 ? provider.topGainers
-        : _rankingTab == 1 ? provider.topLosers
-        : provider.volumeLeaders;
+    final list = _rankingTab == 0
+        ? provider.topGainers
+        : _rankingTab == 1
+            ? provider.topLosers
+            : provider.volumeLeaders;
 
     if (provider.isLoadingDiscovery && list.isEmpty) {
-      return const Center(child: Padding(
+      return const Center(
+          child: Padding(
         padding: EdgeInsets.all(20),
         child: CircularProgressIndicator(),
       ));
@@ -374,7 +440,8 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
     if (list.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 20),
-        child: Center(child: Text('暂无数据', style: TextStyle(color: AppTheme.textHint))),
+        child: Center(
+            child: Text('暂无数据', style: TextStyle(color: AppTheme.textHint))),
       );
     }
 
@@ -382,12 +449,20 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
       children: list.take(10).toList().asMap().entries.map((entry) {
         final i = entry.key;
         final quote = entry.value;
-        return _RankingItem(index: i + 1, quote: quote, onTap: () {
-          final market = quote.market.isNotEmpty ? quote.market : (quote.code.startsWith('6') || quote.code.startsWith('9') ? 'SH' : 'SZ');
-          final stock = StockInfo(code: quote.code, name: quote.name, market: market);
-          context.read<StockProvider>().loadStockDetail(stock);
-          widget.onNavigateToDetail?.call();
-        });
+        return _RankingItem(
+            index: i + 1,
+            quote: quote,
+            onTap: () {
+              final market = quote.market.isNotEmpty
+                  ? quote.market
+                  : (quote.code.startsWith('6') || quote.code.startsWith('9')
+                      ? 'SH'
+                      : 'SZ');
+              final stock =
+                  StockInfo(code: quote.code, name: quote.name, market: market);
+              context.read<StockProvider>().loadStockDetail(stock);
+              widget.onNavigateToDetail?.call();
+            });
       }).toList(),
     );
   }
@@ -428,8 +503,13 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
         provider: provider,
         onTapStock: (quote) {
           Navigator.of(ctx).pop();
-          final market = quote.market.isNotEmpty ? quote.market : (quote.code.startsWith('6') || quote.code.startsWith('9') ? 'SH' : 'SZ');
-          final stock = StockInfo(code: quote.code, name: quote.name, market: market);
+          final market = quote.market.isNotEmpty
+              ? quote.market
+              : (quote.code.startsWith('6') || quote.code.startsWith('9')
+                  ? 'SH'
+                  : 'SZ');
+          final stock =
+              StockInfo(code: quote.code, name: quote.name, market: market);
           context.read<StockProvider>().loadStockDetail(stock);
           widget.onNavigateToDetail?.call();
         },
@@ -445,7 +525,8 @@ class _SearchPageState extends State<SearchPage> with AutomaticKeepAliveClientMi
           children: [
             const Icon(Icons.cloud_off, size: 32, color: AppTheme.textHint),
             const SizedBox(height: 8),
-            const Text('板块数据加载失败', style: TextStyle(color: AppTheme.textSecondary)),
+            const Text('板块数据加载失败',
+                style: TextStyle(color: AppTheme.textSecondary)),
             const SizedBox(height: 8),
             TextButton.icon(
               icon: const Icon(Icons.refresh, size: 16),
@@ -468,7 +549,8 @@ class _RankingItem extends StatelessWidget {
   final StockQuote quote;
   final VoidCallback onTap;
 
-  const _RankingItem({required this.index, required this.quote, required this.onTap});
+  const _RankingItem(
+      {required this.index, required this.quote, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -478,7 +560,8 @@ class _RankingItem extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: Color(0xFFF0F0F0), width: 0.5)),
+          border:
+              Border(bottom: BorderSide(color: Color(0xFFF0F0F0), width: 0.5)),
         ),
         child: Row(
           children: [
@@ -489,7 +572,9 @@ class _RankingItem extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,
-                  color: index <= 3 ? AppTheme.primaryDark : AppTheme.textSecondary,
+                  color: index <= 3
+                      ? AppTheme.primaryDark
+                      : AppTheme.textSecondary,
                 ),
               ),
             ),
@@ -498,12 +583,18 @@ class _RankingItem extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(quote.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                  Text(quote.code, style: const TextStyle(fontSize: 11, color: AppTheme.textHint)),
+                  Text(quote.name,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w500)),
+                  Text(quote.code,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textHint)),
                 ],
               ),
             ),
-            Text(quote.priceText, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+            Text(quote.priceText,
+                style:
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
             const SizedBox(width: 12),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -513,7 +604,8 @@ class _RankingItem extends StatelessWidget {
               ),
               child: Text(
                 quote.changePercentText,
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color),
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.bold, color: color),
               ),
             ),
           ],
@@ -530,7 +622,8 @@ class _SectorCard extends StatelessWidget {
   final double changePercent;
   final VoidCallback onTap;
 
-  const _SectorCard({required this.name, required this.changePercent, required this.onTap});
+  const _SectorCard(
+      {required this.name, required this.changePercent, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -547,11 +640,17 @@ class _SectorCard extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(name, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500), textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(name,
+                style:
+                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
             const SizedBox(height: 4),
             Text(
               '${isUp ? "+" : ""}${changePercent.toStringAsFixed(2)}%',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: color),
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.bold, color: color),
             ),
           ],
         ),
@@ -567,7 +666,10 @@ class _SectorStockSheet extends StatelessWidget {
   final StockProvider provider;
   final void Function(StockQuote quote) onTapStock;
 
-  const _SectorStockSheet({required this.sectorName, required this.provider, required this.onTapStock});
+  const _SectorStockSheet(
+      {required this.sectorName,
+      required this.provider,
+      required this.onTapStock});
 
   @override
   Widget build(BuildContext context) {
@@ -583,7 +685,10 @@ class _SectorStockSheet extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: Row(
                 children: [
-                  Expanded(child: Text(sectorName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                  Expanded(
+                      child: Text(sectorName,
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold))),
                   IconButton(
                     icon: const Icon(Icons.close),
                     onPressed: () => Navigator.of(ctx).pop(),
@@ -596,13 +701,18 @@ class _SectorStockSheet extends StatelessWidget {
               child: provider.isLoadingSectorStocks
                   ? const Center(child: CircularProgressIndicator())
                   : provider.sectorStocks.isEmpty
-                      ? const Center(child: Text('暂无成分股数据', style: TextStyle(color: AppTheme.textHint)))
+                      ? const Center(
+                          child: Text('暂无成分股数据',
+                              style: TextStyle(color: AppTheme.textHint)))
                       : ListView.builder(
                           controller: scrollController,
                           itemCount: provider.sectorStocks.length,
                           itemBuilder: (ctx, index) {
                             final stock = provider.sectorStocks[index];
-                            return _RankingItem(index: index + 1, quote: stock, onTap: () => onTapStock(stock));
+                            return _RankingItem(
+                                index: index + 1,
+                                quote: stock,
+                                onTap: () => onTapStock(stock));
                           },
                         ),
             ),
@@ -625,12 +735,14 @@ class _SearchResultCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<WatchlistProvider>(
       builder: (context, watchlist, _) {
-        final isWatch = watchlist.watchlist.any((s) => s.code == stock.code && s.market == stock.market);
+        final isWatch = watchlist.watchlist
+            .any((s) => s.code == stock.code && s.market == stock.market);
 
         return Card(
           margin: EdgeInsets.zero,
           child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             leading: Container(
               width: 44,
               height: 44,
@@ -649,8 +761,10 @@ class _SearchResultCard extends StatelessWidget {
                 ),
               ),
             ),
-            title: Text(stock.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-            subtitle: Text('${stock.code} · ${stock.exchange}', style: const TextStyle(color: AppTheme.textHint, fontSize: 12)),
+            title: Text(stock.name,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: Text('${stock.code} · ${stock.exchange}',
+                style: const TextStyle(color: AppTheme.textHint, fontSize: 12)),
             trailing: IconButton(
               icon: Icon(
                 isWatch ? Icons.star : Icons.star_border,
@@ -660,12 +774,16 @@ class _SearchResultCard extends StatelessWidget {
                 if (isWatch) {
                   watchlist.remove(stock);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('已取消关注 ${stock.name}'), duration: const Duration(seconds: 1)),
+                    SnackBar(
+                        content: Text('已取消关注 ${stock.name}'),
+                        duration: const Duration(seconds: 1)),
                   );
                 } else {
                   watchlist.add(stock);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('已添加 ${stock.name} 到自选'), duration: const Duration(seconds: 1)),
+                    SnackBar(
+                        content: Text('已添加 ${stock.name} 到自选'),
+                        duration: const Duration(seconds: 1)),
                   );
                 }
               },

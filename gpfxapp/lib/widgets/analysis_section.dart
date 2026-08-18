@@ -15,7 +15,9 @@ class AnalysisSection extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -24,13 +26,15 @@ class AnalysisSection extends StatelessWidget {
             children: [
               Icon(Icons.analytics, size: 16, color: AppTheme.primaryDark),
               SizedBox(width: 6),
-              Text('技术分析详情', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              Text('技术分析详情',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
             ],
           ),
           const SizedBox(height: 16),
 
           // 各策略得分
-          ...analysis.strategyScores.entries.map((entry) => _buildStrategyScore(entry.key, entry.value)),
+          ...analysis.strategyScores.entries
+              .map((entry) => _buildStrategyScore(entry.key, entry.value)),
 
           const SizedBox(height: 12),
 
@@ -40,7 +44,8 @@ class AnalysisSection extends StatelessWidget {
           // 盈亏比
           if (analysis.riskRewardRatio > 0) ...[
             const SizedBox(height: 6),
-            _buildInfoRow('盈亏比', '${analysis.riskRewardRatio.toStringAsFixed(2)} : 1'),
+            _buildInfoRow(
+                '盈亏比', '${analysis.riskRewardRatio.toStringAsFixed(2)} : 1'),
           ],
 
           // 止损止盈
@@ -60,7 +65,11 @@ class AnalysisSection extends StatelessWidget {
           const SizedBox(height: 12),
 
           // 信号列表
-          const Text('信号明细', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13, fontWeight: FontWeight.w500)),
+          const Text('信号明细',
+              style: TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500)),
           const SizedBox(height: 8),
           ...analysis.signals.map((signal) => _buildSignalItem(signal)),
         ],
@@ -92,6 +101,12 @@ class AnalysisSection extends StatelessWidget {
       case 'maCross':
         label = 'MA20/60金叉死叉';
         break;
+      case 'kdj':
+        label = 'KDJ随机指标';
+        break;
+      case 'fundamental':
+        label = '基本面因子';
+        break;
       default:
         label = name;
     }
@@ -102,7 +117,9 @@ class AnalysisSection extends StatelessWidget {
         children: [
           SizedBox(
             width: 140,
-            child: Text(label, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            child: Text(label,
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 13)),
           ),
           Expanded(
             child: ClipRRect(
@@ -119,7 +136,9 @@ class AnalysisSection extends StatelessWidget {
           SizedBox(
             width: 36,
             child: Text(
-              score >= 0 ? '+${score.toStringAsFixed(0)}' : score.toStringAsFixed(0),
+              score >= 0
+                  ? '+${score.toStringAsFixed(0)}'
+                  : score.toStringAsFixed(0),
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 color: score >= 0 ? AppTheme.upColor : AppTheme.downColor,
@@ -137,10 +156,14 @@ class AnalysisSection extends StatelessWidget {
       children: [
         SizedBox(
           width: 80,
-          child: Text(label, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          child: Text(label,
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
         ),
         Expanded(
-          child: Text(value, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+          child: Text(value,
+              style:
+                  const TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
         ),
       ],
     );
@@ -176,14 +199,24 @@ class AnalysisSection extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(signal.name, style: TextStyle(fontWeight: FontWeight.w500, fontSize: 12, color: AppTheme.textPrimary)),
-                Text(signal.description, style: const TextStyle(fontSize: 11, color: AppTheme.textHint), maxLines: 2),
+                Text(signal.name,
+                    style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 12,
+                        color: AppTheme.textPrimary)),
+                Text(signal.description,
+                    style:
+                        const TextStyle(fontSize: 11, color: AppTheme.textHint),
+                    maxLines: 2),
               ],
             ),
           ),
           Text(
-            signal.score >= 0 ? '+${signal.score.toStringAsFixed(0)}' : signal.score.toStringAsFixed(0),
-            style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 13),
+            signal.score >= 0
+                ? '+${signal.score.toStringAsFixed(0)}'
+                : signal.score.toStringAsFixed(0),
+            style: TextStyle(
+                fontWeight: FontWeight.bold, color: color, fontSize: 13),
           ),
         ],
       ),

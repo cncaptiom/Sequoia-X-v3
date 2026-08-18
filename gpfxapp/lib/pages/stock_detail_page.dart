@@ -550,15 +550,16 @@ class StockDetailPage extends StatelessWidget {
     bool isTop = score >= 1.0; // 前7%的股票
     bool isGood = score >= 0.5; // 前28%
     bool isAvoid = ratingStr == 'avoid';
+    // S/A/B/C 颜色对齐全站（红=强买入、橙=买入、琥珀=持有、灰=普通），S级醒目区分于A级
     Color ratingColor;
     if (score >= 1.5) {
-      ratingColor = const Color(0xFF1B5E20);
+      ratingColor = AppTheme.gradeS;
     } else if (score >= 1.0) {
-      ratingColor = const Color(0xFF4CAF50);
+      ratingColor = AppTheme.gradeA;
     } else if (score >= 0.5) {
-      ratingColor = const Color(0xFFF57F17);
+      ratingColor = AppTheme.gradeB;
     } else {
-      ratingColor = const Color(0xFF999999);
+      ratingColor = AppTheme.gradeC;
     }
 
     // 价格相对买入区间的位置 + 评分 → 操盘动作

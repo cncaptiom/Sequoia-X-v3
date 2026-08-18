@@ -45,7 +45,6 @@ class HomePage extends StatelessWidget {
             const MarketOverview(),
             const SizedBox(height: 8),
 
-
             Consumer<PcDataProvider>(
               builder: (context, pcProvider, _) {
                 // 即使PC端数据未加载完成，也显示标题区域
@@ -59,26 +58,37 @@ class HomePage extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
                       child: Row(
                         children: [
-                          const Icon(Icons.computer, color: AppTheme.primaryDark, size: 20),
+                          const Icon(Icons.computer,
+                              color: AppTheme.primaryDark, size: 20),
                           const SizedBox(width: 6),
-                          const Text('PC端精选推荐', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                          const Text('PC端精选推荐',
+                              style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.textPrimary)),
                           const Spacer(),
                           if (isLoading)
                             const SizedBox(
-                              width: 14, height: 14,
+                              width: 14,
+                              height: 14,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           else if (regimeLabel.isNotEmpty)
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
                               decoration: BoxDecoration(
                                 color: AppTheme.primaryDark.withOpacity(0.1),
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: Text(regimeLabel, style: const TextStyle(fontSize: 11, color: AppTheme.primaryDark)),
+                              child: Text(regimeLabel,
+                                  style: const TextStyle(
+                                      fontSize: 11,
+                                      color: AppTheme.primaryDark)),
                             ),
                         ],
                       ),
@@ -86,7 +96,9 @@ class HomePage extends StatelessWidget {
                     if (exposure > 0)
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Text('建议仓位: ${(exposure * 100).toInt()}%', style: const TextStyle(color: AppTheme.textHint, fontSize: 12)),
+                        child: Text('建议仓位: ${(exposure * 100).toInt()}%',
+                            style: const TextStyle(
+                                color: AppTheme.textHint, fontSize: 12)),
                       ),
                     // 推荐统计行
                     if (picks.isNotEmpty)
@@ -97,9 +109,12 @@ class HomePage extends StatelessWidget {
                     // 数据新鲜度
                     if (pcProvider.lastFetch != null)
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-                        child: Text('数据更新于 ${pcProvider.lastFetch!.toLocal().toString().substring(0, 16)}',
-                            style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 2),
+                        child: Text(
+                            '数据更新于 ${pcProvider.lastFetch!.toLocal().toString().substring(0, 16)}',
+                            style: const TextStyle(
+                                fontSize: 10, color: AppTheme.textHint)),
                       ),
                     if (picks.isEmpty && !isLoading)
                       // 无数据时引导提示
@@ -112,25 +127,30 @@ class HomePage extends StatelessWidget {
                         ),
                         child: Row(
                           children: [
-                            Icon(Icons.cloud_off, size: 20, color: AppTheme.textHint.withOpacity(0.5)),
+                            Icon(Icons.cloud_off,
+                                size: 20,
+                                color: AppTheme.textHint.withOpacity(0.5)),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                hasError ? 'PC端数据加载失败，请检查网络' : 'PC端数据将在每日21:00选股后自动更新',
-                                style: const TextStyle(color: AppTheme.textHint, fontSize: 13),
+                                hasError
+                                    ? 'PC端数据加载失败，请检查网络'
+                                    : 'PC端数据将在每日21:00选股后自动更新',
+                                style: const TextStyle(
+                                    color: AppTheme.textHint, fontSize: 13),
                               ),
                             ),
                           ],
                         ),
                       ),
                     if (picks.isNotEmpty)
-                      ...picks.map((pick) => _buildPcStockCard(context, pick, pcProvider)),
+                      ...picks.map((pick) =>
+                          _buildPcStockCard(context, pick, pcProvider)),
                     const SizedBox(height: 8),
                   ],
                 );
               },
             ),
-
 
             // 自选股标题
             Padding(
@@ -139,11 +159,17 @@ class HomePage extends StatelessWidget {
                 children: [
                   const Icon(Icons.star, color: AppTheme.primaryDark, size: 20),
                   const SizedBox(width: 6),
-                  const Text('自选股', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                  const Text('自选股',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textPrimary)),
                   const Spacer(),
                   Consumer<WatchlistProvider>(
                     builder: (_, provider, __) {
-                      return Text('${provider.watchlist.length}只', style: const TextStyle(color: AppTheme.textSecondary));
+                      return Text('${provider.watchlist.length}只',
+                          style:
+                              const TextStyle(color: AppTheme.textSecondary));
                     },
                   ),
                 ],
@@ -158,7 +184,8 @@ class HomePage extends StatelessWidget {
                 }
 
                 if (provider.isLoading && provider.quotes.isEmpty) {
-                  return const Center(child: Padding(
+                  return const Center(
+                      child: Padding(
                     padding: EdgeInsets.all(40),
                     child: CircularProgressIndicator(),
                   ));
@@ -168,7 +195,9 @@ class HomePage extends StatelessWidget {
                   children: provider.watchlist.map((stock) {
                     final quote = provider.quotes[stock.code];
                     final analysis = provider.analysisResults[stock.code];
-                    final position = context.watch<PositionProvider>().getPosition(stock.code);
+                    final position = context
+                        .watch<PositionProvider>()
+                        .getPosition(stock.code);
                     return StockCard(
                       stock: stock,
                       quote: quote,
@@ -197,28 +226,44 @@ class HomePage extends StatelessWidget {
     int s = 0, a = 0, b = 0, sustained = 0;
     for (final p in picks) {
       final sc = (p.totalScore as num?)?.toDouble() ?? 0;
-      if (sc >= 1.5) s++;
-      else if (sc >= 1.0) a++;
+      if (sc >= 1.5)
+        s++;
+      else if (sc >= 1.0)
+        a++;
       else if (sc >= 0.5) b++;
       final cd = (p.consecutiveDays as num?)?.toInt() ?? 1;
       if (cd >= 3) sustained++;
     }
     return Row(children: [
       if (s > 0) _summaryChip('S $s', AppTheme.signalBuy),
-      if (a > 0) ...[const SizedBox(width: 6), _summaryChip('A $a', const Color(0xFFFF6B35))],
-      if (b > 0) ...[const SizedBox(width: 6), _summaryChip('B $b', AppTheme.signalHold)],
-      if (sustained > 0) ...[const SizedBox(width: 6), _summaryChip('持续$sustained', AppTheme.signalBuy)],
+      if (a > 0) ...[
+        const SizedBox(width: 6),
+        _summaryChip('A $a', const Color(0xFFFF6B35))
+      ],
+      if (b > 0) ...[
+        const SizedBox(width: 6),
+        _summaryChip('B $b', AppTheme.signalHold)
+      ],
+      if (sustained > 0) ...[
+        const SizedBox(width: 6),
+        _summaryChip('持续$sustained', AppTheme.signalBuy)
+      ],
     ]);
   }
+
   Widget _summaryChip(String text, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(4),
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(text, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 10, fontWeight: FontWeight.w600, color: color)),
     );
   }
+
   Widget _buildEmptyWatchlist(BuildContext context) {
     return Container(
       margin: const EdgeInsets.all(16),
@@ -229,11 +274,14 @@ class HomePage extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Icon(Icons.star_border, size: 48, color: AppTheme.textHint.withOpacity(0.5)),
+          Icon(Icons.star_border,
+              size: 48, color: AppTheme.textHint.withOpacity(0.5)),
           const SizedBox(height: 12),
-          const Text('还没有自选股', style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
+          const Text('还没有自选股',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
           const SizedBox(height: 8),
-          const Text('去搜索页面添加你关注的股票', style: TextStyle(color: AppTheme.textHint, fontSize: 14)),
+          const Text('去搜索页面添加你关注的股票',
+              style: TextStyle(color: AppTheme.textHint, fontSize: 14)),
           const SizedBox(height: 16),
           ElevatedButton.icon(
             onPressed: () => onNavigateToSearch?.call(),
@@ -242,7 +290,8 @@ class HomePage extends StatelessWidget {
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.primaryDark,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
           ),
         ],
@@ -257,7 +306,8 @@ class HomePage extends StatelessWidget {
     return 'SH';
   }
 
-  void _confirmRemove(BuildContext context, StockInfo stock, WatchlistProvider provider) {
+  void _confirmRemove(
+      BuildContext context, StockInfo stock, WatchlistProvider provider) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -282,24 +332,31 @@ class HomePage extends StatelessWidget {
   }
 
   /// PC端推荐卡片（含实时操作信号 + 详细数据）
-  Widget _buildPcStockCard(BuildContext context, dynamic pick, dynamic pcProvider) {
+  Widget _buildPcStockCard(
+      BuildContext context, dynamic pick, dynamic pcProvider) {
     final score = (pick.totalScore as num?)?.toDouble() ?? 0;
     final labelColor = score >= 1.5
         ? AppTheme.signalBuy
-        : score >= 1.0 ? const Color(0xFFFF6B35) : AppTheme.textSecondary;
+        : score >= 1.0
+            ? AppTheme.gradeA
+            : AppTheme.textSecondary;
 
     // 置信度等级（阈值基于全市场评分分布校准）
     // S: 前0.2% (>=1.5分), A: 前7% (>=1.0分), B: 前28% (>=0.5分), C: 其余
     String level;
     Color levelColor;
     if (pick.totalScore >= 1.5) {
-      level = "S"; levelColor = AppTheme.signalBuy;
+      level = "S";
+      levelColor = AppTheme.signalBuy;
     } else if (pick.totalScore >= 1.0) {
-      level = "A"; levelColor = const Color(0xFFFF6B35);
+      level = "A";
+      levelColor = AppTheme.gradeA;
     } else if (pick.totalScore >= 0.5) {
-      level = "B"; levelColor = AppTheme.signalHold;
+      level = "B";
+      levelColor = AppTheme.signalHold;
     } else {
-      level = "C"; levelColor = AppTheme.textHint;
+      level = "C";
+      levelColor = AppTheme.textHint;
     }
 
     // 获取完整PC评级数据
@@ -337,18 +394,25 @@ class HomePage extends StatelessWidget {
 
               if (currentPrice <= entryHigh) {
                 if (isTop && allowBuy) {
-                  actionText = '关注'; actionColor = AppTheme.signalHold;
+                  actionText = '关注';
+                  actionColor = AppTheme.signalHold;
                 } else if (allowAttention) {
-                  actionText = '关注'; actionColor = AppTheme.signalHold;
+                  actionText = '关注';
+                  actionColor = AppTheme.signalHold;
                 } else {
-                  actionText = '等待'; actionColor = AppTheme.textHint;
+                  actionText = '等待';
+                  actionColor = AppTheme.textHint;
                 }
               } else {
-                actionText = '等待'; actionColor = AppTheme.textHint;
+                actionText = '等待';
+                actionColor = AppTheme.textHint;
               }
               final midPrice = (entryLow + entryHigh) / 2;
-              final deviation = midPrice > 0 ? ((currentPrice - midPrice) / midPrice * 100) : 0;
-              priceInfo = '${currentPrice.toStringAsFixed(1)} ${deviation >= 0 ? "+" : ""}${deviation.toStringAsFixed(1)}%';
+              final deviation = midPrice > 0
+                  ? ((currentPrice - midPrice) / midPrice * 100)
+                  : 0;
+              priceInfo =
+                  '${currentPrice.toStringAsFixed(1)} ${deviation >= 0 ? "+" : ""}${deviation.toStringAsFixed(1)}%';
             }
           }
         }
@@ -364,7 +428,10 @@ class HomePage extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () {
-          final stock = StockInfo(code: pick.symbol, name: pick.name, market: _inferMarket(pick.symbol));
+          final stock = StockInfo(
+              code: pick.symbol,
+              name: pick.name,
+              market: _inferMarket(pick.symbol));
           context.read<StockProvider>().loadStockDetail(stock);
           onNavigateToDetail?.call();
         },
@@ -378,40 +445,57 @@ class HomePage extends StatelessWidget {
                 children: [
                   // 操作信号色条+标签
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: actionColor.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(actionText,
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: actionColor)),
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: actionColor)),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(pick.name,
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-                      overflow: TextOverflow.ellipsis),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 15),
+                        overflow: TextOverflow.ellipsis),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                     decoration: BoxDecoration(
                       color: levelColor.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: Text(level, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: levelColor)),
+                    child: Text(level,
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: levelColor)),
                   ),
-
                 ],
               ),
               const SizedBox(height: 6),
               // 第二行：价格 + 偏离度
               Row(
                 children: [
-                  Text(pick.symbol, style: const TextStyle(color: AppTheme.textHint, fontSize: 11)),
+                  Text(pick.symbol,
+                      style: const TextStyle(
+                          color: AppTheme.textHint, fontSize: 11)),
                   if (priceInfo.isNotEmpty) ...[
                     const SizedBox(width: 12),
-                    Text('现价 ', style: TextStyle(color: AppTheme.textHint, fontSize: 11)),
-                    Text(priceInfo, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: actionColor)),
+                    Text('现价 ',
+                        style:
+                            TextStyle(color: AppTheme.textHint, fontSize: 11)),
+                    Text(priceInfo,
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: actionColor)),
                   ],
                 ],
               ),
@@ -423,24 +507,34 @@ class HomePage extends StatelessWidget {
                     if (buyZoneText.isNotEmpty)
                       Flexible(
                         child: Text('买入 $buyZoneText',
-                          style: const TextStyle(fontSize: 11, color: AppTheme.primaryDark),
-                          overflow: TextOverflow.ellipsis),
+                            style: const TextStyle(
+                                fontSize: 11, color: AppTheme.primaryDark),
+                            overflow: TextOverflow.ellipsis),
                       ),
                   ],
                 ),
               ],
-              if (stopLossText.isNotEmpty || takeProfitText.isNotEmpty || rrText.isNotEmpty) ...[
+              if (stopLossText.isNotEmpty ||
+                  takeProfitText.isNotEmpty ||
+                  rrText.isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Row(
                   children: [
                     if (stopLossText.isNotEmpty)
-                      Text('止损 $stopLossText', style: const TextStyle(fontSize: 10, color: AppTheme.downColor)),
-                    if (stopLossText.isNotEmpty && takeProfitText.isNotEmpty) const SizedBox(width: 10),
+                      Text('止损 $stopLossText',
+                          style: const TextStyle(
+                              fontSize: 10, color: AppTheme.downColor)),
+                    if (stopLossText.isNotEmpty && takeProfitText.isNotEmpty)
+                      const SizedBox(width: 10),
                     if (takeProfitText.isNotEmpty)
-                      Text('止盈 $takeProfitText', style: const TextStyle(fontSize: 10, color: AppTheme.upColor)),
+                      Text('止盈 $takeProfitText',
+                          style: const TextStyle(
+                              fontSize: 10, color: AppTheme.upColor)),
                     if (rrText.isNotEmpty) ...[
                       const Spacer(),
-                      Text(rrText, style: const TextStyle(fontSize: 10, color: AppTheme.textHint)),
+                      Text(rrText,
+                          style: const TextStyle(
+                              fontSize: 10, color: AppTheme.textHint)),
                     ],
                   ],
                 ),
