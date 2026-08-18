@@ -339,6 +339,30 @@ def main():
                     q_avg[qk] = round(float(np.mean(vals)) * 100, 2)
                 stats["ic_analysis"]["avg_quantile_returns"] = q_avg
 
+                # 单调性得分：检查 q1→q5 是否严格单调递增（正向因子）
+                spread_vals = [q.get("spread", 0) for q in q_series]
+                pos_ratio = sum(1 for v in spread_vals if v > 0) / len(spread_vals) if spread_vals else 0
+                # 统计相邻组顺序正确的比例
+                mono_ok = 0
+                mono_total = 0
+                for q in q_series:
+                    qs = [q.get(f"q{i}", 0) for i in range(1, 6)]
+                    for i in range(4):
+                        if qs[i] != qs[i+1]:
+                            mono_ok += 1 if qs[i] < qs[i+1] else 0
+                            mono_total += 1
+                mono_score = mono_ok / mono_total if mono_total > 0 else 0.0
+                # 多空组合夏普比率（基于 spread 时间序列）
+                spread_arr = np.array(spread_vals)
+                spread_sharpe = (
+                    float(np.mean(spread_arr) / np.std(spread_arr, ddof=1)) * np.sqrt(250 / 20)
+                    if np.std(spread_arr, ddof=1) > 1e-10 else 0.0
+                )
+
+                stats["ic_analysis"]["monotonicity_score"] = round(mono_score, 4)
+                stats["ic_analysis"]["spread_positive_pct"] = round(pos_ratio * 100, 1)
+                stats["ic_analysis"]["long_short_sharpe"] = round(spread_sharpe, 4)
+
             # 平均换手率
             to_series = icd["turnover_series"]
             if to_series:
@@ -353,8 +377,65 @@ def main():
         if "ic_analysis" in stats:
             ica = stats["ic_analysis"]
             ic_str = f"  IC={ica.get('mean_ic',0):+.4f}  IR={ica.get('ic_ir',0):.2f}  "
-            ic_str += f"五分位数价差={ica.get('avg_quantile_returns',{}).get('spread',0):+.2f}%"
+            ic_str += f"单调性={ica.get('monotonicity_score',0):.2f}  "
+            ic_str += f"多空Sharpe={ica.get('long_short_sharpe',0):.2f}  "
+            ic_str += f"价差={ica.get('avg_quantile_returns',{}).get('spread',0):+.2f}%"
         print(f"  {name:<15}{sig_str}{ic_str}", flush=True)
+
+    # ── 综合健康度评分（基于排名百分位） ──
+    print("  计算综合健康度评分...", flush=True)
+    metrics_pool = ["mean_ic", "ic_ir", "monotonicity_score",
+                    "long_short_sharpe", "avg_turnover"]
+    # 收集数据
+    rank_data: dict[str, dict[str, float]] = {}
+    for name, _, _ in STRATEGIES:
+        ica = summary.get(name, {}).get("ic_analysis", {})
+        if ica:
+            rank_data[name] = {
+                "mean_ic": ica.get("mean_ic", 0),
+                "ic_ir": ica.get("ic_ir", 0),
+                "monotonicity_score": ica.get("monotonicity_score", 0),
+                "long_short_sharpe": ica.get("long_short_sharpe", 0),
+                "avg_turnover": ica.get("avg_turnover", 100),
+            }
+    if rank_data:
+        names = list(rank_data.keys())
+        n = len(names)
+        for metric in metrics_pool:
+            reverse_sort = metric != "avg_turnover"
+            sorted_names = sorted(names,
+                                  key=lambda nm: rank_data[nm].get(metric, 0),
+                                  reverse=reverse_sort)
+            for rank, nm in enumerate(sorted_names):
+                rank_pct = (n - rank) / n if n > 0 else 0
+                ica = summary[nm].setdefault("ic_analysis", {})
+                ica[f"rank_{metric}"] = round(rank_pct, 4)
+
+        # 综合健康度 = 各指标排名百分位的加权平均
+        health_weights = {
+            "rank_mean_ic": 0.25,
+            "rank_ic_ir": 0.25,
+            "rank_monotonicity_score": 0.20,
+            "rank_long_short_sharpe": 0.20,
+            "rank_avg_turnover": 0.10,
+        }
+        for name in names:
+            ica = summary[name].get("ic_analysis", {})
+            health = sum(
+                ica.get(metric, 0) * weight
+                for metric, weight in health_weights.items()
+            )
+            summary[name]["health_score"] = round(health, 4)
+
+        # 按健康度排序并打印
+        sorted_by_health = sorted(
+            [(name, summary[name].get("health_score", 0)) for name in names],
+            key=lambda x: -x[1],
+        )
+        print(f"\n  ── 策略综合健康度排名 ──")
+        for rank, (name, score) in enumerate(sorted_by_health, 1):
+            stars = "█" * max(1, int(score * 10))
+            print(f"  {rank}. {name:<15} {score:.3f} {stars}")
 
     output = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),

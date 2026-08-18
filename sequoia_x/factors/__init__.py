@@ -183,51 +183,106 @@ class FactorCalculator:
         return result
 
     def _get_fundamental(self, symbol: str) -> Optional[dict]:
-        """通过 akshare 获取基本面数据（带缓存）。
-
-        使用 akshare 的 stock_financial_abstract_ths 接口。
-        """
+        """通过 baostock 获取基本面数据（带缓存）。"""
         if symbol in self._fundamental_cache:
             return self._fundamental_cache[symbol]
 
         try:
-            import akshare as ak
+            import baostock as bs
 
-            # 获取股票基本信息（含市值、PE、PB）
+            bs.login()
             try:
-                info = ak.stock_individual_info_em(symbol=symbol)
-                if info is not None and not info.empty:
-                    info_dict = dict(zip(info["item"], info["value"]))
-                    result = {
-                        "pe": self._safe_float(info_dict.get("市盈率-动态")),
-                        "pb": self._safe_float(info_dict.get("市净率")),
-                        "market_cap": self._safe_float(info_dict.get("总市值")),
-                    }
-                    self._fundamental_cache[symbol] = result
-                    return result
-            except Exception:
-                pass
+                # 获取股票基本资料
+                bs_code = self._to_bs_code(symbol)
+                if not bs_code:
+                    self._fundamental_cache[symbol] = None
+                    return None
 
-            # Fallback: 使用同花顺财务摘要
-            try:
-                fin = ak.stock_financial_abstract_ths(symbol=symbol, indicator="按报告期")
-                if fin is not None and not fin.empty:
-                    latest = fin.iloc[0]
-                    result = {
-                        "pe": self._safe_float(latest.get("市盈率")),
-                        "pb": self._safe_float(latest.get("市净率")),
-                        "roe": self._safe_float(latest.get("净资产收益率")),
-                        "gross_margin": self._safe_float(latest.get("销售毛利率")),
-                        "debt_ratio": self._safe_float(latest.get("资产负债率")),
-                        "market_cap": self._safe_float(latest.get("总市值")),
-                    }
-                    self._fundamental_cache[symbol] = result
-                    return result
-            except Exception:
-                pass
+                # 获取最近4个季度的财务报表（取最新季度）
+                import datetime
+                today = datetime.date.today()
+                year = today.year
+                latest_data = {}
+
+                # 利润表数据（ROE, EPS等）
+                for q in range(1, 5):
+                    rs = bs.query_profit_data(code=bs_code, year=year, quarter=q)
+                    if rs.error_code == "0":
+                        while rs.next():
+                            row = rs.get_row_data()
+                            fields = rs.fields
+                            data = dict(zip(fields, row))
+                            if data.get("roeAvg"):
+                                latest_data["roe"] = float(data["roeAvg"])
+                            if data.get("epsTTM"):
+                                latest_data["eps"] = float(data["epsTTM"])
+                            if data.get("npMargin"):
+                                latest_data["net_profit_margin"] = float(data["npMargin"])
+                            break
+                if not latest_data.get("roe"):
+                    # 尝试上一年
+                    for q in range(1, 5):
+                        rs = bs.query_profit_data(code=bs_code, year=year - 1, quarter=q)
+                        if rs.error_code == "0":
+                            while rs.next():
+                                row = rs.get_row_data()
+                                data = dict(zip(rs.fields, row))
+                                if data.get("roeAvg"):
+                                    latest_data["roe"] = float(data["roeAvg"])
+                                latest_data["eps"] = float(data.get("epsTTM", 0) or 0)
+                                break
+
+                # 成长性数据
+                for q in range(1, 5):
+                    rs = bs.query_growth_data(code=bs_code, year=year, quarter=q)
+                    if rs.error_code == "0":
+                        while rs.next():
+                            row = rs.get_row_data()
+                            data = dict(zip(rs.fields, row))
+                            if data.get("YOYNI"):
+                                latest_data["profit_growth"] = float(data["YOYNI"])
+                            if data.get("YOYEquity"):
+                                latest_data["equity_growth"] = float(data["YOYEquity"])
+                            break
+
+                # 现金流数据
+                for q in range(1, 5):
+                    rs = bs.query_cash_flow_data(code=bs_code, year=year, quarter=q)
+                    if rs.error_code == "0":
+                        while rs.next():
+                            row = rs.get_row_data()
+                            data = dict(zip(rs.fields, row))
+                            if data.get("CFOToNP"):
+                                latest_data["cfo_to_np"] = float(data["CFOToNP"])
+                            break
+
+                # 获取最新价格计算 PE/PB
+                df = self.engine.get_ohlcv(symbol)
+                if df is not None and not df.empty and latest_data.get("eps"):
+                    last_close = float(df["close"].iloc[-1])
+                    eps = latest_data["eps"]
+                    if eps > 0:
+                        latest_data["pe"] = round(last_close / eps, 2)
+                    # PB 需要每股净资产，可从 balance 获取
+                    for q in range(1, 5):
+                        rs = bs.query_balance_data(code=bs_code, year=year, quarter=q)
+                        if rs.error_code == "0":
+                            while rs.next():
+                                row = rs.get_row_data()
+                                data = dict(zip(rs.fields, row))
+                                if data.get("assetToEquity"):
+                                    latest_data["asset_to_equity"] = float(data["assetToEquity"])
+                                break
+
+                if latest_data:
+                    self._fundamental_cache[symbol] = latest_data
+                    return latest_data
+
+            finally:
+                bs.logout()
 
         except ImportError:
-            logger.log(5, "akshare 未安装，跳过基本面因子")
+            logger.log(5, "baostock 未安装，跳过基本面因子")
         except Exception as exc:
             logger.log(5, f"[{symbol}] 基本面数据获取失败: {exc}")
 
@@ -235,15 +290,13 @@ class FactorCalculator:
         return None
 
     @staticmethod
-    def _safe_float(value) -> Optional[float]:
-        """安全转换为浮点数。"""
-        if value is None:
-            return None
-        try:
-            v = float(value)
-            return v if not np.isnan(v) and not np.isinf(v) else None
-        except (ValueError, TypeError):
-            return None
+    def _to_bs_code(symbol: str) -> str:
+        """转换 '000001' 为 'sh.600000' 或 'sz.000001'。"""
+        sym = symbol.strip().zfill(6)
+        if sym.startswith(("6", "9")):
+            return f"sh.{sym}"
+        else:
+            return f"sz.{sym}"
 
 
 # ── 横截面排名器 ──

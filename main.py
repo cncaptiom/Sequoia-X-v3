@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import socket
-socket.setdefaulttimeout(10.0)
+socket.setdefaulttimeout(30.0)
 
 from sequoia_x.core.config import get_settings
 from sequoia_x.core.logger import get_logger
@@ -215,10 +215,12 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
             rating_score_map = {r.symbol: r.total_score for r in (rating_results or [])}
             rating_map = {r.symbol: r.rating for r in (rating_results or [])}
             rating_label_map = {r.symbol: r.rating_label for r in (rating_results or [])}
+            rating_stars_map = {r.symbol: r.rating_stars for r in (rating_results or [])}
             top_picks = [{
                 "symbol": s.symbol, "name": s.name,
                 "rating": rating_map.get(s.symbol, "strong_buy" if s.confidence >= 0.75 else "buy" if s.confidence >= 0.60 else "watch"),
                 "rating_label": rating_label_map.get(s.symbol, "S级" if s.confidence >= 0.75 else "A级" if s.confidence >= 0.60 else "关注"),
+                "rating_stars": rating_stars_map.get(s.symbol, "★★★★★" if s.confidence >= 0.75 else "★★★★" if s.confidence >= 0.60 else "★★★"),
                 "total_score": rating_score_map.get(s.symbol, s.confidence * 10),
                 "current_price": s.current_price,
             } for s in sorted(signals, key=lambda x: x.confidence, reverse=True)[:10]]
@@ -226,6 +228,7 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
             top_picks = [{
                 "symbol": r.symbol, "name": r.name,
                 "rating": r.rating, "rating_label": r.rating_label,
+                "rating_stars": r.rating_stars,
                 "total_score": r.total_score, "current_price": r.current_price,
             } for r in rating_results[:10]]
 
@@ -320,7 +323,7 @@ def _run_daily(settings, logger, engine, notifier) -> None:
         logger.info("今日非交易日，跳过数据同步")
     else:
         count = engine.sync_today_bulk()
-        logger.info(f"快照同步完成，写入 {count} 只股票")
+        logger.info(f"快照同步完成，写入 {count} 条数据")
 
     # -- market regime detection --
     detector = RegimeDetector(engine)
@@ -612,6 +615,12 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     name_resolver = get_name_resolver()
     stock_names = name_resolver.get_names(symbols)
 
+    # 过滤 ST 股票（退市风险警示，±5%涨跌幅+退市风险，不应参与常规评级）
+    st_removed = [s for s in symbols if "ST" in stock_names.get(s, s).upper()]
+    if st_removed:
+        symbols = [s for s in symbols if s not in st_removed]
+        logger.info(f"过滤 ST 股票 {len(st_removed)} 只，剩余 {len(symbols)} 只参与评级")
+
     # 市场状态检测
     detector = RegimeDetector(engine)
     regime = detector.detect("000905")
@@ -624,17 +633,19 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     rating_config.apply_regime(regime.label)
     logger.info(f"策略权重: maVol={rating_config.weight_ma_volume:.2f} turtle={rating_config.weight_turtle_trade:.2f} "
                 f"meanRev={rating_config.weight_mean_reversion:.2f} volPrice={rating_config.weight_volume_price:.2f} "
-                f"atr={rating_config.weight_atr_channel:.2f} macdRsi={rating_config.weight_macd_rsi:.2f} maCross={rating_config.weight_ma_cross:.2f}")
+                f"atr={rating_config.weight_atr_channel:.2f} macdRsi={rating_config.weight_macd_rsi:.2f} "
+                f"maCross={rating_config.weight_ma_cross:.2f} kdj={rating_config.weight_kdj:.2f} "
+                f"fund={rating_config.weight_fundamental:.2f}")
     rating_engine = RatingEngine(config=rating_config)
 
     # IC 追踪（信号质量监控）
     from sequoia_x.signal.quality import ICTracker
     ic_tracker = ICTracker()
 
-    # 全市场扫描
+    # 全市场扫描（数据走复权安全加载：跳过最近含未复权跳变的股票）
     all_results = rating_engine.scan_market(
         symbols=symbols,
-        data_loader=lambda s: engine.get_ohlcv(s),
+        data_loader=lambda s: engine.get_ohlcv_rating_safe(s),
         top_n=99999,
         min_bars=60,
         ic_tracker=ic_tracker,
@@ -929,6 +940,13 @@ def _run_factors(settings, logger, engine, top_n_str: str) -> None:
         logger.error("无本地数据，请先执行 --backfill")
         return
 
+    # 过滤 ST 股票（与评级流程一致）
+    from sequoia_x.utils.name_resolver import get_name_resolver
+    before = len(symbols)
+    symbols = get_name_resolver().filter_st(symbols)
+    if len(symbols) != before:
+        logger.info(f"过滤 ST 股票 {before - len(symbols)} 只，剩余 {len(symbols)} 只参与多因子扫描")
+
     logger.info(f"开始多因子扫描 {len(symbols)} 只股票...")
     calc = FactorCalculator(engine)
     factor_results = calc.compute_all(symbols, progress=True)
@@ -1090,6 +1108,14 @@ def main() -> None:
         "--verify-data", action="store_true",
         help="验证数据一致性：对比 mootdx 与腾讯财经的收盘价",
     )
+    parser.add_argument(
+        "--refresh-history", action="store_true",
+        help="定向重刷历史：仅重刷最近存在>21%未复权跳变的股票（修复前复权过期）",
+    )
+    parser.add_argument(
+        "--refresh-history-all", action="store_true",
+        help="全量重刷历史：重刷全部股票（耗时数小时，建议非交易时段执行）",
+    )
     args = parser.parse_args()
 
     # 调度相关命令单独处理（无需初始化整个系统）
@@ -1153,6 +1179,21 @@ def main() -> None:
             logger.info(f"mootdx 获取 {len(all_symbols)} 只股票")
             engine.backfill_from_mootdx(symbols=all_symbols)
             logger.info("mootdx 回填完成")
+            return
+
+        if args.refresh_history or args.refresh_history_all:
+            local_set = set(engine.get_local_symbols())
+            if args.refresh_history_all:
+                symbols = sorted(local_set)
+                logger.info(f"全量重刷 {len(symbols)} 只股票（可能耗时数小时）...")
+            else:
+                gap_symbols = engine.find_recent_gap_symbols()
+                symbols = [s for s in gap_symbols if s in local_set]
+                logger.info(
+                    f"检测到 {len(gap_symbols)} 只含未复权跳变的股票，定向重刷其中 {len(symbols)} 只 A 股..."
+                )
+            engine.refresh_history(symbols)
+            logger.info("重刷完成")
             return
 
         _run_daily(settings, logger, engine, FeishuNotifier(settings))

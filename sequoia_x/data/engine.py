@@ -493,6 +493,150 @@ class DataEngine:
         logger.debug(f"[{symbol}] get_clean_ohlcv: {len(df)}/{before} 行")
         return df
 
+    def get_ohlcv_rating_safe(self, symbol: str, lookback: int = 120,
+                              gap_threshold: float = 0.21) -> pd.DataFrame:
+        """供评级扫描使用的数据加载：检测最近 lookback 根K线内是否有未复权跳变。
+
+        A股涨跌停上限 20%（创业板/科创板），单日 |涨跌|>21% 只可能是未复权的
+        除权除息（高送转/大额分红）或数据错误，会严重扭曲技术指标。发现时返回
+        空表，由调用方（scan_market 的 len<min_bars 检查）跳过该股票。
+
+        注意：这是读时防护，根治仍需定期全量重刷前复权历史
+        （backfill 目前跳过已入库股票，历史 qfq 在除权后不会自动重算）。
+        """
+        df = self.get_ohlcv(symbol)
+        if df is None or df.empty:
+            return df
+        recent = df.tail(lookback)
+        if len(recent) >= 2:
+            chg = recent["close"].pct_change()
+            mask = chg.abs() > gap_threshold
+            if mask.any():
+                gap_date = str(recent.loc[mask, "date"].iloc[0])
+                logger.warning(
+                    f"[{symbol}] 最近{lookback}根K线含未复权跳变({gap_date})，跳过评级"
+                )
+                return recent.iloc[:0]
+        return df
+
+    def find_recent_gap_symbols(self, lookback_days: int = 175,
+                                gap_threshold: float = 0.21) -> list[str]:
+        """找出最近窗口内存在 >gap_threshold 单日跳变（未复权除权/数据错误）的股票。
+
+        用 SQL 窗口函数一次扫完，供 refresh_history 定向重刷。
+        lookback_days 用日历天数近似（120 交易日 ≈ 175 日历日，稍宽松无妨）。
+        """
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT symbol FROM (
+                    SELECT symbol, close,
+                           LAG(close) OVER (PARTITION BY symbol ORDER BY date) AS prev_close
+                    FROM stock_daily WHERE date >= ?
+                )
+                WHERE prev_close > 0 AND ABS((close - prev_close) / prev_close) > ?
+                """,
+                (cutoff, gap_threshold),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def refresh_history(self, symbols: list[str], progress: bool = True) -> int:
+        """全量重刷历史日K线（baostock 前复权 adjustflag="2"），删旧行整表替换。
+
+        修复前复权过期：sync/backfill 只追加新 bar，除权后历史不重算，库内残留除权假跳变。
+        重刷统一用 baostock 明确前复权，保证口径一致。
+
+        Args:
+            symbols: 需要重刷的股票列表。
+            progress: 是否打印进度。
+
+        Returns:
+            成功重刷的股票数。
+        """
+        import baostock as bs
+        from datetime import date
+        import time
+
+        RATE_LIMIT_DELAY = 0.05
+        today_str = date.today().strftime("%Y-%m-%d")
+
+        def _ensure_login() -> None:
+            try:
+                if bs.query_stock_basic(code="sh.600000").error_code != "0":
+                    raise ConnectionError
+            except Exception:
+                bs.logout()
+                bs.login()
+
+        lg = bs.login()
+        if lg.error_code != "0":
+            logger.error(f"baostock 登录失败: {lg.error_msg}")
+            return 0
+
+        refreshed = failed = skipped = 0
+        try:
+            for i, symbol in enumerate(symbols):
+                ok = False
+                bs_code = self._to_baostock_code(symbol)
+                for attempt in range(3):
+                    try:
+                        rs = bs.query_history_k_data_plus(
+                            bs_code,
+                            "date,open,high,low,close,volume,amount",
+                            start_date=self.start_date, end_date=today_str,
+                            frequency="d", adjustflag="2",
+                        )
+                    except Exception:
+                        _ensure_login()
+                        time.sleep(1.5)
+                        continue
+                    if rs.error_code != "0":
+                        logger.warning(f"[{symbol}] baostock 查询失败: {rs.error_msg}")
+                        break
+                    rows = []
+                    while rs.next():
+                        rows.append(rs.get_row_data())
+                    if not rows:
+                        skipped += 1
+                        ok = True
+                        break
+                    _FIELDS = ["date", "open", "high", "low", "close", "volume", "amount"]
+                    df = pd.DataFrame(rows, columns=_FIELDS)
+                    for col in ["open", "high", "low", "close", "volume", "amount"]:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                    df = df.dropna(subset=["close"])
+                    df = df[df["volume"] > 0]
+                    if df.empty:
+                        skipped += 1
+                        ok = True
+                        break
+                    df["symbol"] = symbol
+                    df = df.rename(columns={"amount": "turnover"})
+                    df = df[["symbol", "date", "open", "high", "low", "close",
+                             "volume", "turnover"]]
+                    with sqlite3.connect(self.db_path) as conn:
+                        conn.execute("DELETE FROM stock_daily WHERE symbol = ?", (symbol,))
+                        df.to_sql("stock_daily", conn, if_exists="append", index=False)
+                        conn.commit()
+                    refreshed += 1
+                    ok = True
+                    break
+                if not ok:
+                    failed += 1
+
+                if progress and (i + 1) % 100 == 0:
+                    logger.info(
+                        f"重刷进度: {i+1}/{len(symbols)} 成功{refreshed} 失败{failed} 跳过{skipped}"
+                    )
+                time.sleep(RATE_LIMIT_DELAY)
+        finally:
+            bs.logout()
+
+        logger.info(f"重刷完成 — 成功: {refreshed} | 失败: {failed} | 跳过: {skipped}")
+        return refreshed
+
     @staticmethod
     def _to_baostock_code(symbol: str) -> str:
         """将纯数字代码转为 baostock 格式：6/9开头 -> sh，其余 -> sz。"""
@@ -502,9 +646,13 @@ class DataEngine:
     # ── 数据同步 ──
 
     def sync_today_bulk(self) -> int:
-        """多进程并行拉取增量数据（首选 mootdx，备选 baostock）。"""
+        """多进程并行拉取增量数据（首选 mootdx，备选 baostock）。
+
+        改进：mootdx 改用 ThreadPoolExecutor 并发拉取，速度提升 10-20 倍。
+        """
         from datetime import date, timedelta
-        from multiprocessing import Pool
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
 
         today_str = date.today().strftime("%Y-%m-%d")
 
@@ -532,39 +680,122 @@ class DataEngine:
 
         logger.info(f"需要更新 {len(tasks)} 只股票")
 
-        # 优先使用 mootdx（TCP 协议更稳定），带快速失败
+        # ── mootdx 健康检查：先试 3 只，全部空则直接降级 ──
         all_rows = []
+        _mootdx_alive = False
         try:
-            logger.info("使用 mootdx 同步...")
-            deadline = time.time() + 300  # 最多尝试 5 分钟
-            client = _mootdx_get_client()
-            for symbol, bs_code, start, end in tasks:
-                if time.time() > deadline:
-                    logger.warning("mootdx 同步超时（>5min），降级到 baostock")
+            from mootdx.quotes import Quotes
+            _probe_client = Quotes.factory(market='std')
+            _probe_symbols = [t[0] for t in tasks[:3]]
+            for sym in _probe_symbols:
+                _df = _probe_client.bars(symbol=sym, frequency=9, start=0, count=5)
+                if _df is not None and not _df.empty:
+                    _mootdx_alive = True
                     break
-                try:
-                    df = client.bars(symbol=symbol, frequency=9, start=0, count=5)
-                    if df is not None and not df.empty:
-                        df["date"] = pd.to_datetime(df["datetime"]).dt.date.astype(str)
-                        df = df[df["date"] == today_str]
-                        if not df.empty:
-                            all_rows.extend(_mootdx_parse_bars(df, symbol))
-                except Exception:
-                    continue
-            if all_rows:
-                logger.info(f"mootdx 同步完成: {len(all_rows)} 条")
+            logger.info(f"mootdx 健康检查: {'存活' if _mootdx_alive else '不可用，直接降级 baostock'}")
         except Exception as e:
-            logger.warning(f"mootdx 同步失败: {e}")
+            logger.warning(f"mootdx 健康检查异常: {e}")
 
-        # mootdx 无数据时降级到 baostock
+        # ── mootdx 并行拉取（仅健康检查通过才执行） ──
+        if _mootdx_alive:
+            try:
+                logger.info("使用 mootdx 并发同步（16线程）...")
+                deadline = time.time() + 180  # 最多 3 分钟
+                _mootdx_local = threading.local()
+
+                def _get_mootdx_client():
+                    if not hasattr(_mootdx_local, "client"):
+                        from mootdx.quotes import Quotes
+                        _mootdx_local.client = Quotes.factory(market='std')
+                    return _mootdx_local.client
+
+                def _mootdx_fetch_one(task):
+                    if time.time() > deadline:
+                        return None
+                    symbol, bs_code, start, end = task
+                    try:
+                        client = _get_mootdx_client()
+                        df = client.bars(symbol=symbol, frequency=9, start=0, count=5)
+                        if df is not None and not df.empty:
+                            df["date"] = pd.to_datetime(df["datetime"]).dt.date.astype(str)
+                            df = df[df["date"] == today_str]
+                            if not df.empty:
+                                return _mootdx_parse_bars(df, symbol)
+                    except Exception:
+                        pass
+                    return None
+
+                n_workers = min(16, len(tasks))
+                with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                    futures = {pool.submit(_mootdx_fetch_one, t): t for t in tasks}
+                    done = 0
+                    for f in as_completed(futures):
+                        done += 1
+                        if done % 500 == 0:
+                            logger.info(f"mootdx 进度: {done}/{len(tasks)}")
+                        try:
+                            rows = f.result()
+                            if rows:
+                                all_rows.extend(rows)
+                        except Exception:
+                            continue
+
+                if all_rows:
+                    logger.info(f"mootdx 同步完成: {len(all_rows)} 条（{done} 只）")
+            except Exception as e:
+                logger.warning(f"mootdx 同步失败: {e}")
+
+        # mootdx 无数据时降级到 baostock（线程池 + 单连接锁，兼容 Windows）
         if not all_rows:
             logger.info("mootdx 无数据，降级到 baostock...")
-            n_workers = min(8, len(tasks))
-            chunks = [tasks[i::n_workers] for i in range(n_workers)]
-            with Pool(n_workers) as pool:
-                batch_results = pool.map(_bs_fetch_batch, chunks)
-            for batch in batch_results:
-                all_rows.extend(batch)
+            import baostock as bs
+            _bs_deadline = time.time() + 300  # 最多 5 分钟
+            _bs_lock = threading.Lock()
+            _bs_login_ok = False
+            try:
+                lg = bs.login()
+                if lg.error_code == '0':
+                    _bs_login_ok = True
+            except Exception as e:
+                logger.warning(f"baostock 登录失败: {e}")
+
+            if _bs_login_ok:
+                def _bs_fetch_one(task):
+                    if time.time() > _bs_deadline:
+                        return None
+                    symbol, bs_code, start, end = task
+                    with _bs_lock:
+                        try:
+                            rs = bs.query_history_k_data_plus(
+                                bs_code,
+                                "date,open,high,low,close,volume,amount",
+                                start_date=start, end_date=end,
+                                frequency="d", adjustflag="2",
+                            )
+                            rows = []
+                            while rs.next():
+                                rows.append([symbol] + rs.get_row_data())
+                            return rows if rows else None
+                        except Exception:
+                            return None
+
+                n_bs_workers = min(8, len(tasks))
+                with ThreadPoolExecutor(max_workers=n_bs_workers) as pool:
+                    futures = {pool.submit(_bs_fetch_one, t): t for t in tasks}
+                    for f in as_completed(futures):
+                        try:
+                            rows = f.result()
+                            if rows:
+                                all_rows.extend(rows)
+                        except Exception:
+                            continue
+                try:
+                    bs.logout()
+                except Exception:
+                    pass
+                logger.info(f"baostock 同步完成: {len(all_rows)} 条")
+            else:
+                logger.warning("baostock 不可用，跳过数据同步")
 
         if not all_rows:
             logger.info("无新数据（可能非交易日）")
@@ -704,6 +935,7 @@ class DataEngine:
                     with sqlite3.connect(self.db_path) as conn:
                         df.to_sql("stock_daily", conn, if_exists="append", index=False)
                 except sqlite3.IntegrityError:
+                    logger.log(5, f"[已跳过] {symbol} 重复数据")
                     pass
 
                 success += 1

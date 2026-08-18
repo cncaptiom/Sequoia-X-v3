@@ -405,7 +405,7 @@ def ma_cross_strategy(
     """MA20 与 MA60 金叉/死叉。"""
     result = StrategyResult()
     n = len(df)
-    if n < 61:
+    if n < 62:
         return result
 
     close = df["close"]
@@ -414,6 +414,7 @@ def ma_cross_strategy(
 
     m20_now, m20_prev = ma20.iloc[-1], ma20.iloc[-2]
     m60_now, m60_prev = ma60.iloc[-1], ma60.iloc[-2]
+    # ma60.iloc[-3] 在 n=62 时（索引 59）已是有效值
     m60_prev2 = ma60.iloc[-3] if len(ma60) >= 3 else m60_now
 
     # MA20 上穿 MA60（金叉）
@@ -533,3 +534,113 @@ def kdj_strategy(
             result.signals.append("KDJ-均线共振: 价格在MA20之上且KDJ金叉")
 
     return result
+
+
+# ── 策略I: 基本面因子评分（基于 Tortoriello 框架）─
+
+def fundamental_strategy(
+    df: pd.DataFrame,
+    financial: dict | None = None,
+) -> StrategyResult:
+    """基本面多因子评分：估值 + 盈利性 + 成长性 + 现金流质量。
+
+    参考 Tortoriello《量化投资策略》的7大维度分类，
+    使用 ROE/PE/PB/净利润增长率/现金流质量 等指标。
+
+    Args:
+        df: OHLCV DataFrame（用于获取最新价格计算 PE）
+        financial: 财务数据字典，包含 roe/eps/profit_growth/cfo_to_np 等
+
+    Returns:
+        StrategyResult
+    """
+    result = StrategyResult()
+    if not financial:
+        return result
+
+    # ── 盈利性因子（A股校准：P80=20.8%, P60=15.5%, P40=11.4%）──
+    roe = financial.get("roe")
+    if roe is not None and roe > 0:
+        if roe >= 20:
+            result.score += 3
+            result.signals.append(f"基本面-高ROE({roe:.1f}%)")
+        elif roe >= 15:
+            result.score += 2
+            result.signals.append(f"基本面-中等ROE({roe:.1f}%)")
+        elif roe >= 10:
+            result.score += 1
+        else:
+            result.score -= 1
+            result.signals.append(f"基本面-低ROE({roe:.1f}%)")
+    elif roe is not None and roe <= 0:
+        # 亏损公司不应是中性，明确惩罚
+        result.score -= 2
+        result.signals.append(f"基本面-亏损(ROE={roe:.1f}%)")
+
+    # ── 估值因子（PE 越低越好；A股中位数约15-25倍）──
+    pe = financial.get("pe")
+    if pe is not None and pe > 0:
+        if pe < 10:
+            result.score += 2
+            result.signals.append(f"基本面-低估(PE={pe:.1f})")
+        elif pe < 20:
+            result.score += 1
+        elif pe < 35:
+            result.score += 0
+        else:
+            result.score -= 1
+            result.signals.append(f"基本面-高估(PE={pe:.1f})")
+    elif pe is not None and pe <= 0:
+        # 亏损（无正EPS）明确惩罚，不做中性处理
+        result.score -= 2
+        result.signals.append("基本面-亏损(PE<=0)")
+
+    # ── 成长性因子（A股校准：P60≈15%, P80≈16%；集中度高）──
+    profit_growth = financial.get("profit_growth")
+    if profit_growth is not None:
+        if profit_growth > 15:
+            result.score += 2
+            result.signals.append(f"基本面-高成长(净利润增长{profit_growth:.1f}%)")
+        elif profit_growth > 8:
+            result.score += 1
+        elif profit_growth > 0:
+            result.score += 0.5
+        else:
+            result.score -= 1
+            result.signals.append(f"基本面-负增长(净利润增长{profit_growth:.1f}%)")
+
+    # ── 现金流质量（CFO/净利润比；>1为高质量）──
+    cfo_to_np = financial.get("cfo_to_np")
+    if cfo_to_np is not None:
+        if cfo_to_np > 1.0:
+            result.score += 1.5
+            result.signals.append("基本面-现金流质量好(CFO>净利润)")
+        elif cfo_to_np > 0.5:
+            result.score += 0.5
+        else:
+            result.score -= 1
+            result.signals.append("基本面-现金流质量差(CFO<净利润50%)")
+
+    # ── 净利率因子（A股校准：P60≈28%, P30≈12%）──
+    np_margin = financial.get("net_profit_margin")
+    if np_margin is not None and np_margin > 0:
+        if np_margin > 25:
+            result.score += 1.5
+            result.signals.append(f"基本面-高净利率({np_margin:.1f}%)")
+        elif np_margin > 12:
+            result.score += 0.5
+    elif np_margin is not None and np_margin <= 0:
+        result.score -= 1
+        result.signals.append(f"基本面-负净利率({np_margin:.1f}%)")
+
+    return result
+
+
+# ══════════════════════════════════════════
+# 校准记录（基于10只A股核心股票2024年报）
+# ══════════════════════════════════════════
+# ROE:      P20=5.8%  P40=11.4%  P60=15.5%  P80=20.8%
+# 净利率:   P30=12.8%  P60=28.2%
+# 增长:     P60=15.0%, 集中度高
+# CFO/NP:   P20=1.02, 中位数=1.56
+# 注：样本仅10只大盘股，分布偏大市值，需更大样本确认

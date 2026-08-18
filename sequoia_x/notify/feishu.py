@@ -1,4 +1,4 @@
-﻿"""飞书通知模块：将选股结果通过 Webhook 推送至飞书群。"""
+"""飞书通知模块：将选股结果通过 Webhook 推送至飞书群。"""
 
 import json
 from datetime import date
@@ -20,6 +20,7 @@ class FeishuNotifier:
         "atrChannel": "ATR通道",
         "macdRsi": "MACD+RSI共振",
         "maCross": "MA20/60金叉",
+        "kdj": "KDJ随机指标",
     }
 
     """飞书 Webhook 推送器。
@@ -56,17 +57,19 @@ class FeishuNotifier:
         import baostock as bs
         bs.login()
         all_names = {}
-        rs = bs.query_stock_basic(code_name="", code="")
-        while rs.next():
-            row = rs.get_row_data()
-            raw_code = row[0]      # "sh.600000" 或 "sz.000001"
-            name = row[1]          # 股票名称
-            status = row[4]        # "1" = 上市
-            stock_type = row[5]    # "1" = 股票
-            if status == "1" and stock_type == "1":
-                pure_code = raw_code.split(".")[1]
-                all_names[pure_code] = name
-        bs.logout()
+        try:
+            rs = bs.query_stock_basic(code_name="", code="")
+            while rs.next():
+                row = rs.get_row_data()
+                raw_code = row[0]      # "sh.600000" 或 "sz.000001"
+                name = row[1]          # 股票名称
+                status = row[4]        # "1" = 上市
+                stock_type = row[5]    # "1" = 股票
+                if status == "1" and stock_type == "1":
+                    pure_code = raw_code.split(".")[1]
+                    all_names[pure_code] = name
+        finally:
+            bs.logout()
         # 只返回需要的股票名称
         return {c: all_names.get(c, c) for c in symbols}
 
@@ -154,7 +157,7 @@ class FeishuNotifier:
             else:
                 logger.info(f"飞书推送成功 [{webhook_key}]，共 {len(symbols)} 只股票")
 
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             logger.error(f"飞书推送请求异常 [{webhook_key}]：{exc}")
 
     def send_detailed_analysis(
@@ -288,7 +291,7 @@ class FeishuNotifier:
             else:
                 logger.info(f"详细分析推送成功，共 {len(top_stocks)} 只股票")
 
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             logger.error(f"详细分析推送请求异常：{exc}")
 
     def send_rating_results(
@@ -424,7 +427,7 @@ class FeishuNotifier:
                 )
             else:
                 logger.info(f"评级推送成功，共 {len(results)} 只")
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             logger.error(f"评级推送请求异常：{exc}")
 
     def send_regime_alert(self, regime_result, webhook_key: str = "regime") -> None:
@@ -489,7 +492,7 @@ class FeishuNotifier:
                 logger.error(f"市场状态推送失败 HTTP={resp.status_code}")
             else:
                 logger.info(f"市场状态推送成功 [{webhook_key}]: {regime_result.label}")
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             logger.error(f"市场状态推送异常 [{webhook_key}]：{exc}")
 
     def send_factor_results(
@@ -561,8 +564,9 @@ class FeishuNotifier:
                 logger.error(f"因子结果推送失败 HTTP={resp.status_code}")
             else:
                 logger.info(f"因子结果推送成功 [{webhook_key}]，共{len(display)}只")
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             logger.error(f"因子结果推送异常 [{webhook_key}]：{exc}")
+
     def _get_single_name(self, code: str) -> str:
         """查询单只股票名称（带缓存）。"""
         if not hasattr(self, "_name_cache"):

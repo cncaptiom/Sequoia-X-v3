@@ -23,10 +23,13 @@ logger = get_logger(__name__)
 class CosUploader:
     """腾讯云 COS 上传器（封装官方 SDK）。"""
 
-    def __init__(self, bucket: str, region: str, secret_id: str, secret_key: str):
+    def __init__(self, bucket: str, region: str, secret_id: str, secret_key: str,
+                 timeout: int = 60):
         self.bucket = bucket
         self.region = region
-        config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key)
+        self.timeout = timeout
+        config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key,
+                           Timeout=timeout)
         self.client = CosS3Client(config)
 
     def _put_json(self, path: str, data: dict[str, Any]) -> bool:

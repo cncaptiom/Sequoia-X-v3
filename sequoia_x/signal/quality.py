@@ -35,11 +35,40 @@ def _rank_ic(x: list[float], y: list[float]) -> tuple[float, float]:
     return rho, 0.0
 
 
+# ── 因子预处理 ──
+
+
+def winsorize(arr: list[float], lower_pct: float = 1.0, upper_pct: float = 99.0) -> list[float]:
+    """去极值：百分位法截断极端值。
+
+    将低于 lower_pct 百分位的值提升到该分位值，
+    将高于 upper_pct 百分位的值降低到该分位值。
+    """
+    if not arr:
+        return arr
+    a = np.array(arr)
+    lo = float(np.percentile(a, lower_pct))
+    hi = float(np.percentile(a, upper_pct))
+    return np.clip(a, lo, hi).tolist()
+
+
+def standardize(arr: list[float]) -> list[float]:
+    """标准化：Z-score，使均值为0、标准差为1。"""
+    if not arr:
+        return arr
+    a = np.array(arr, dtype=float)
+    mu = float(np.mean(a))
+    sigma = float(np.std(a))
+    if sigma < 1e-10:
+        return [0.0] * len(a)
+    return ((a - mu) / sigma).tolist()
+
+
 class ICTracker:
     """追踪每个策略的 IC 时间序列，检测信号衰减，调整权重。"""
 
     STRATEGIES = ["maVolume", "turtleTrade", "meanReversion", "volumePrice",
-                  "atrChannel", "macdRsi", "maCross", "kdj"]
+                  "atrChannel", "macdRsi", "maCross", "kdj", "fundamental"]
 
     def __init__(self, history_path: str = "output/ic_history.json"):
         self.history_path = history_path
@@ -84,6 +113,58 @@ class ICTracker:
         if date_str not in self._pending:
             self._pending[date_str] = scores_by_symbol
             self.save()
+
+    # ── 因子预处理 ──
+
+    @staticmethod
+    def preprocess_scores(scores_by_symbol: dict[str, dict[str, float]],
+                          strategy_names: list[str],
+                          winsorize_pct: float = 1.0) -> dict[str, dict[str, float]]:
+        """截面预处理：对每个策略的评分做去极值 + 标准化。
+
+        步骤：
+          1. 收集每个策略在全市场所有股票的原始评分
+          2. 去极值（百分位截断）
+          3. Z-score 标准化
+          4. 放回原结构
+
+        Args:
+            scores_by_symbol: {symbol: {strategy: score}}
+            strategy_names: 需要处理的策略名称列表
+            winsorize_pct: 截断百分位（默认1%/99%）
+
+        Returns:
+            预处理后的相同结构
+        """
+        # 收集每个策略的原始值
+        raw: dict[str, list[tuple[str, float]]] = {s: [] for s in strategy_names}
+        for sym, ss in scores_by_symbol.items():
+            for s in strategy_names:
+                v = ss.get(s)
+                if v is not None:
+                    raw[s].append((sym, v))
+
+        # 对每个策略做预处理
+        processed: dict[str, dict[str, float]] = {}
+        for s in strategy_names:
+            pairs = raw.get(s, [])
+            if not pairs:
+                continue
+            symbols = [p[0] for p in pairs]
+            values = [p[1] for p in pairs]
+
+            # 去极值
+            trimmed = winsorize(values, lower_pct=winsorize_pct,
+                                upper_pct=100.0 - winsorize_pct)
+            # 标准化
+            normalized = standardize(trimmed)
+
+            for sym, val in zip(symbols, normalized):
+                if sym not in processed:
+                    processed[sym] = {}
+                processed[sym][s] = val
+
+        return processed
 
     # ── N 日 IC 计算（交易日） ──
 
@@ -130,6 +211,12 @@ class ICTracker:
 
         for d_str in evaluable:
             scores_by_symbol = self._pending[d_str]
+
+            # 因子预处理：去极值 + 标准化
+            scores_by_symbol = self.preprocess_scores(
+                scores_by_symbol, self.STRATEGIES, winsorize_pct=1.0
+            )
+
             log.info(f"IC计算 [{d_str}] lookforward={lookforward_days}d, "
                      f"股票数={len(scores_by_symbol)}")
 
@@ -294,23 +381,46 @@ class ICTracker:
             ic_std = float(np.std([e["ic"] for e in recent])) if len(recent) > 1 else 0
 
             entries_all = entries
-            avg_60d = float(np.mean([e["ic"] for e in entries_all[-60:]])) if len(entries_all) >= 60 else avg_ic
-            ic_std_60d = float(np.std([e["ic"] for e in entries_all[-60:]])) if len(entries_all) >= 60 else ic_std
+            n_all = len(entries_all)
+            avg_60d = float(np.mean([e["ic"] for e in entries_all[-60:]])) if n_all >= 60 else avg_ic
+            ic_std_60d = float(np.std([e["ic"] for e in entries_all[-60:]])) if n_all >= 60 else ic_std
+            ic_std_60d = ic_std_60d if ic_std_60d > 1e-10 else 0.0
 
-            ir_20 = avg_ic / ic_std if ic_std > 0 else 0
-            ir_60 = avg_60d / ic_std_60d if ic_std_60d > 0 else 0
+            ir_20 = avg_ic / ic_std if ic_std > 1e-10 else 0.0
+            ir_60 = avg_60d / ic_std_60d if ic_std_60d > 1e-10 else 0.0
             latest_spread = recent[-1].get("spread_return", 0) if recent else 0
             is_decayed, neg_run = self.detect_decay(s)
+
+            # IC 正比例
+            ic_pos = sum(1 for e in recent if e.get("ic", 0) > 0)
+            ic_pos_ratio = ic_pos / len(recent) if recent else 0.0
+
+            # IC 显著性：p < 0.05 的比例
+            ic_sig = sum(1 for e in recent if e.get("p_value", 1.0) < 0.05)
+            ic_sig_ratio = ic_sig / len(recent) if recent else 0.0
+
+            # IR 状态判定
+            if ir_20 >= 1.0:
+                ir_status = "优秀"
+            elif ir_20 >= 0.5:
+                ir_status = "合格"
+            elif ir_20 >= 0:
+                ir_status = "弱"
+            else:
+                ir_status = "差"
 
             summary[s] = {
                 "avg_ic_20d": round(avg_ic, 4),
                 "avg_ic_60d": round(avg_60d, 4),
                 "ir_20d": round(ir_20, 4),
                 "ir_60d": round(ir_60, 4),
+                "ic_positive_ratio": round(ic_pos_ratio, 4),
+                "ic_significant_ratio": round(ic_sig_ratio, 4),
+                "ir_status": ir_status,
                 "latest_spread": round(latest_spread, 4),
                 "neg_consecutive": neg_run,
                 "decayed": is_decayed,
-                "samples": len(entries),
+                "samples": n_all,
             }
         return summary
 
@@ -320,18 +430,22 @@ class ICTracker:
         if not summary:
             print("无 IC 数据")
             return
-        print(f"\n{'='*90}")
-        print(f"  信号质量报告 (IC追踪)")
-        print(f"{'='*90}")
-        print(f"{'策略':<20} {'IC-20d':<10} {'IC-60d':<10} {'IR-20d':<10} {'IR-60d':<10} {'价差':<8} {'衰减':<8}")
-        print(f"{'-'*90}")
+        print(f"\n{'='*110}")
+        print(f"  信号质量报告 (IC追踪) │ IC正比=IC>0比例 │ IR状态: 优秀≥1.0 | 合格≥0.5 | 弱≥0 | 差<0")
+        print(f"{'='*110}")
+        print(f"{'策略':<18} {'IC-20d':<9} {'IC-60d':<9} {'IR-20d':<9} {'IR-60d':<9}"
+              f" {'IC正比':<8} {'p<.05':<8} {'IR状态':<6} {'价差':<7} {'衰减':<6}")
+        print(f"{'-'*110}")
         for s in self.STRATEGIES:
             info = summary.get(s)
             if not info:
                 continue
-            label = s
-            decay_mark = "⚠" if info["decayed"] else "✓"
-            print(f"{label:<20} {info['avg_ic_20d']:<+10.4f} {info['avg_ic_60d']:<+10.4f} "
-                  f"{info['ir_20d']:<+10.4f} {info['ir_60d']:<+10.4f} "
-                  f"{info['latest_spread']:<+8.4f} {decay_mark:<8}")
-        print(f"{'='*90}")
+            ir_st = info["ir_status"]
+            decay_mark = "[衰减]" if info["decayed"] else "[正常]"
+            # IR状态着色提示
+            ir_tag = ir_st
+            print(f"{s:<18} {info['avg_ic_20d']:<+9.4f} {info['avg_ic_60d']:<+9.4f} "
+                  f"{info['ir_20d']:<+9.4f} {info['ir_60d']:<+9.4f} "
+                  f"{info['ic_positive_ratio']:<8.2%} {info['ic_significant_ratio']:<8.2%} "
+                  f"{ir_tag:<6} {info['latest_spread']:<+7.4f} {decay_mark:<6}")
+        print(f"{'='*110}")

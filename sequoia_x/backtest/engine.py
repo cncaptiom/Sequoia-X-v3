@@ -26,6 +26,7 @@ class BacktestConfig:
     max_positions: int = 10                     # 同时最大持仓数
     position_size_pct: float = 0.10             # 单票仓位上限（占资金%）
     commission: float = 0.0003                  # 手续费率（万三）
+    stamp_tax: float = 0.0005                   # 卖出印花税（2023-08 起 0.05%）
     slippage: float = 0.001                     # 滑点（千一）
     stop_loss_pct: float = -0.08                # 止损线（-8%）
     take_profit_pct: float = 0.20               # 止盈线（+20%）
@@ -241,11 +242,21 @@ class BacktestEngine:
                     elif hold_days >= cfg.max_hold_days:
                         exit_reason = "time_exit"
 
+                    # A股执行约束：跌停封死时无法卖出，持仓顺延到下一交易日
+                    if exit_reason and len(df_cut) >= 2:
+                        prev_close = float(df_cut["close"].iloc[-2])
+                        limit_down = round(prev_close * (1 - self._limit_pct(sym)), 2)
+                        if current_price <= limit_down + 0.001:
+                            continue
+
                     if exit_reason:
                         exit_price = current_price * (1 - cfg.slippage)
-                        pnl = (exit_price - pos["entry_price"]) * pos["quantity"]
-                        pnl -= pos["entry_price"] * pos["quantity"] * cfg.commission
-                        pnl -= exit_price * pos["quantity"] * cfg.commission
+                        # 平仓：收回本金+盈亏（扣卖出佣金与印花税），与开仓时扣除的成本对应
+                        entry_cost = pos["entry_price"] * pos["quantity"] * (1 + cfg.commission)
+                        proceeds = exit_price * pos["quantity"]
+                        exit_commission = proceeds * cfg.commission
+                        exit_tax = proceeds * cfg.stamp_tax
+                        pnl = proceeds - exit_commission - exit_tax - entry_cost
                         trades.append(Trade(
                             symbol=sym,
                             entry_date=pos["entry_date"],
@@ -254,11 +265,11 @@ class BacktestEngine:
                             exit_price=exit_price,
                             quantity=pos["quantity"],
                             pnl=round(pnl, 2),
-                            pnl_pct=round(pnl_pct * 100, 2),
+                            pnl_pct=round((pnl / entry_cost) * 100, 2) if entry_cost > 0 else 0.0,
                             exit_reason=exit_reason,
                             hold_days=hold_days,
                         ))
-                        capital += pnl
+                        capital += proceeds - exit_commission - exit_tax
                         del positions[sym]
                 except Exception:
                     continue
@@ -275,11 +286,19 @@ class BacktestEngine:
                     df_cut = df_sym[df_sym["date"] <= current_date]
                     if df_cut.empty:
                         continue
-                    entry_price = float(df_cut["close"].iloc[-1]) * (1 + cfg.slippage)
+                    current_price = float(df_cut["close"].iloc[-1])
+                    # A股执行约束：涨停封死时无法买入
+                    if len(df_cut) >= 2:
+                        prev_close = float(df_cut["close"].iloc[-2])
+                        limit_up = round(prev_close * (1 + self._limit_pct(sym)), 2)
+                        if current_price >= limit_up - 0.001:
+                            continue
+                    entry_price = current_price * (1 + cfg.slippage)
                     position_value = capital * cfg.position_size_pct
                     quantity = max(int(position_value / entry_price / 100) * 100, 100)
                     cost = entry_price * quantity * (1 + cfg.commission)
-                    if cost > capital * 0.02:
+                    if cost > 0 and cost <= capital:  # 现金足够才开仓，并即时扣除成本
+                        capital -= cost
                         positions[sym] = {
                             "entry_date": current_date,
                             "entry_price": entry_price,
@@ -338,6 +357,19 @@ class BacktestEngine:
             f"最大回撤{result.max_drawdown:.1%}"
         )
         return result
+
+    @staticmethod
+    def _limit_pct(symbol: str) -> float:
+        """A股涨跌停幅度（按板块）：主板±10%、创业板/科创板±20%、北交所±30%。
+
+        注：ST 股为 ±5%，此处未区分（回测池未过滤 ST 时的近似）。
+        """
+        code = symbol.strip().split('.')[-1].zfill(6)
+        if code.startswith(("688", "300", "301")):
+            return 0.20
+        if code.startswith(("8", "4", "92")):
+            return 0.30
+        return 0.10
 
     def _get_trading_dates(self, sample_symbol: str, start: str, end: str) -> list[str]:
         """获取回测区间内的交易日列表（从数据库全局查询）。"""

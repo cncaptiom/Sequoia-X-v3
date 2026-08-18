@@ -67,6 +67,14 @@ class NameResolver:
         self._load_all()
         return {s: self._names.get(s, s) for s in symbols}
 
+    def filter_st(self, symbols: list[str]) -> list[str]:
+        """过滤名称含 ST / *ST（退市风险警示）的股票。
+
+        ST 股有 ±5% 涨跌幅限制和退市风险，不应混入常规选股池。
+        """
+        self._load_all()
+        return [s for s in symbols if "ST" not in self._names.get(s, s).upper()]
+
     def get_industries(self, symbols: list[str]) -> dict[str, str]:
         result: dict[str, str] = {}
         try:
