@@ -449,15 +449,15 @@ class StockDetailPage extends StatelessWidget {
 
     // 评级判定（用评分阈值代替字符串匹配，对齐全市场评分分布）
     // S: >=1.5(前0.2%)  A: >=1.0(前7%)  B: >=0.5(前28%)
-    bool isTop = score >= 1.0; // 前7%的股票
+    bool isTop = score >= AppTheme.scoreA; // 前7%的股票
     bool isAvoid = ratingStr == 'avoid';
     // S/A/B/C 颜色对齐全站（红=强买入、橙=买入、琥珀=持有、灰=普通），S级醒目区分于A级
     Color ratingColor;
-    if (score >= 1.5) {
+    if (score >= AppTheme.scoreS) {
       ratingColor = AppTheme.gradeS;
-    } else if (score >= 1.0) {
+    } else if (score >= AppTheme.scoreA) {
       ratingColor = AppTheme.gradeA;
-    } else if (score >= 0.5) {
+    } else if (score >= AppTheme.scoreB) {
       ratingColor = AppTheme.gradeB;
     } else {
       ratingColor = AppTheme.gradeC;

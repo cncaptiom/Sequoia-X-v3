@@ -335,9 +335,9 @@ class HomePage extends StatelessWidget {
   Widget _buildPcStockCard(
       BuildContext context, dynamic pick, dynamic pcProvider) {
     final score = (pick.totalScore as num?)?.toDouble() ?? 0;
-    final labelColor = score >= 1.5
+    final labelColor = score >= AppTheme.scoreS
         ? AppTheme.signalBuy
-        : score >= 1.0
+        : score >= AppTheme.scoreA
             ? AppTheme.gradeA
             : AppTheme.textSecondary;
 
@@ -345,13 +345,13 @@ class HomePage extends StatelessWidget {
     // S: 前0.2% (>=1.5分), A: 前7% (>=1.0分), B: 前28% (>=0.5分), C: 其余
     String level;
     Color levelColor;
-    if (pick.totalScore >= 1.5) {
+    if (pick.totalScore >= AppTheme.scoreS) {
       level = "S";
       levelColor = AppTheme.signalBuy;
-    } else if (pick.totalScore >= 1.0) {
+    } else if (pick.totalScore >= AppTheme.scoreA) {
       level = "A";
       levelColor = AppTheme.gradeA;
-    } else if (pick.totalScore >= 0.5) {
+    } else if (pick.totalScore >= AppTheme.scoreB) {
       level = "B";
       levelColor = AppTheme.signalHold;
     } else {
@@ -388,7 +388,7 @@ class HomePage extends StatelessWidget {
 
             if (currentPrice > 0 && entryLow > 0) {
               final regime = pcProvider.marketRegimeLabel;
-              final isTop = score >= 1.0;
+              final isTop = score >= AppTheme.scoreA;
               final allowBuy = regime.contains('强牛') || regime.contains('弱牛');
               final allowAttention = !regime.contains('强熊');
 

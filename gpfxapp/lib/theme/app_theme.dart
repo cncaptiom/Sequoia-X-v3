@@ -31,6 +31,11 @@ class AppTheme {
   static const Color gradeB = signalHold; // B级-琥珀
   static const Color gradeC = textHint; // C级-灰
 
+  // 评级评分阈值（对齐全市场评分分布校准，全站统一，防止页面间漂移）
+  static const double scoreS = 1.5; // S级 前0.2%
+  static const double scoreA = 1.0; // A级 前7%
+  static const double scoreB = 0.5; // B级 前28%
+
   static ThemeData get theme {
     return ThemeData(
       useMaterial3: true,

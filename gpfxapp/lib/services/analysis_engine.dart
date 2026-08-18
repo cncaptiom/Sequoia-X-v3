@@ -3,11 +3,13 @@ import '../models/analysis_result.dart';
 import '../models/kline_data.dart';
 import '../models/stock_quote.dart';
 import '../models/strategy_config.dart';
+import '../theme/app_theme.dart';
 
 class AnalysisEngine {
   final StrategyConfig config;
 
-  AnalysisEngine({StrategyConfig? config}) : config = config ?? const StrategyConfig();
+  AnalysisEngine({StrategyConfig? config})
+      : config = config ?? const StrategyConfig();
 
   /// 执行完整分析
   AnalysisResult analyze({
@@ -46,10 +48,14 @@ class AnalysisEngine {
     // 动态权重分配：从StrategyConfig读取（PC端定期同步，无PC数据时用默认值）
     final weights = <String, double>{};
     if (config.maVolumeEnabled) weights['maVolume'] = config.weightMaVolume;
-    if (config.turtleTradeEnabled) weights['turtleTrade'] = config.weightTurtleTrade;
-    if (config.meanReversionEnabled) weights['meanReversion'] = config.weightMeanReversion;
-    if (config.volumePriceEnabled) weights['volumePrice'] = config.weightVolumePrice;
-    if (config.atrChannelEnabled) weights['atrChannel'] = config.weightAtrChannel;
+    if (config.turtleTradeEnabled)
+      weights['turtleTrade'] = config.weightTurtleTrade;
+    if (config.meanReversionEnabled)
+      weights['meanReversion'] = config.weightMeanReversion;
+    if (config.volumePriceEnabled)
+      weights['volumePrice'] = config.weightVolumePrice;
+    if (config.atrChannelEnabled)
+      weights['atrChannel'] = config.weightAtrChannel;
     if (config.macdRsiEnabled) weights['macdRsi'] = config.weightMacdRsi;
     if (config.maCrossEnabled) weights['maCross'] = config.weightMaCross;
     if (config.kdjEnabled) weights['kdj'] = config.weightKdj;
@@ -182,7 +188,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: '趋势-均线排列',
         type: SignalType.bullish,
-        description: 'MA5(${ma5.toStringAsFixed(2)}) > MA10(${ma10.toStringAsFixed(2)}) > MA20(${ma20.toStringAsFixed(2)}) > MA60(${ma60.toStringAsFixed(2)})',
+        description:
+            'MA5(${ma5.toStringAsFixed(2)}) > MA10(${ma10.toStringAsFixed(2)}) > MA20(${ma20.toStringAsFixed(2)}) > MA60(${ma60.toStringAsFixed(2)})',
         score: 0,
       ));
     } else {
@@ -197,7 +204,8 @@ class AnalysisEngine {
     }
 
     // 条件2：MA20方向向上（需至少40根K线才能得到有效的MA20前值）
-    final ma20Prev = closes.length >= 40 ? _calcMA(closes, 20)[closes.length - 21] : ma20;
+    final ma20Prev =
+        closes.length >= 40 ? _calcMA(closes, 20)[closes.length - 21] : ma20;
     if (ma20 > ma20Prev) {
       conditions.add('MA20上翘 ✓');
     } else {
@@ -212,7 +220,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: '趋势-MA20支撑',
         type: SignalType.bullish,
-        description: '收盘价${lastClose.toStringAsFixed(2)} 在 MA20(${ma20.toStringAsFixed(2)}) 之上',
+        description:
+            '收盘价${lastClose.toStringAsFixed(2)} 在 MA20(${ma20.toStringAsFixed(2)}) 之上',
         score: 0,
       ));
     } else {
@@ -251,7 +260,8 @@ class AnalysisEngine {
         signals.add(Signal(
           name: 'MaVolume-金叉放量',
           type: SignalType.bullish,
-          description: 'MA${config.maShort}(${maShortNow.toStringAsFixed(2)})上穿MA${config.maLong}(${maLongNow.toStringAsFixed(2)})，成交量${(lastVol / avgVolume).toStringAsFixed(1)}倍均量',
+          description:
+              'MA${config.maShort}(${maShortNow.toStringAsFixed(2)})上穿MA${config.maLong}(${maLongNow.toStringAsFixed(2)})，成交量${(lastVol / avgVolume).toStringAsFixed(1)}倍均量',
           score: 3,
         ));
       } else {
@@ -296,8 +306,8 @@ class AnalysisEngine {
 
   // ==================== 策略B: TurtleTrade ====================
 
-  _StrategyResult _turtleTradeStrategy(
-      List<double> closes, List<double> highs, List<double> lows, List<double> volumes) {
+  _StrategyResult _turtleTradeStrategy(List<double> closes, List<double> highs,
+      List<double> lows, List<double> volumes) {
     final score = _ScoreCounter();
     final signals = <Signal>[];
     final lastClose = closes.last;
@@ -305,9 +315,12 @@ class AnalysisEngine {
     final lastVol = volumes.last;
 
     // 20日最高/最低
-    final recentHigh = highs.sublist(max(0, highs.length - config.breakPeriod)).reduce(max);
-    final recentLow = lows.sublist(max(0, lows.length - config.breakPeriod)).reduce(min);
-    final high60 = highs.sublist(max(0, highs.length - config.newHighPeriod)).reduce(max);
+    final recentHigh =
+        highs.sublist(max(0, highs.length - config.breakPeriod)).reduce(max);
+    final recentLow =
+        lows.sublist(max(0, lows.length - config.breakPeriod)).reduce(min);
+    final high60 =
+        highs.sublist(max(0, highs.length - config.newHighPeriod)).reduce(max);
 
     // 突破前高
     if (lastClose >= recentHigh) {
@@ -316,7 +329,8 @@ class AnalysisEngine {
         signals.add(Signal(
           name: 'Turtle-放量突破',
           type: SignalType.bullish,
-          description: '价格突破${config.breakPeriod}日高点(${recentHigh.toStringAsFixed(2)})，成交量放大',
+          description:
+              '价格突破${config.breakPeriod}日高点(${recentHigh.toStringAsFixed(2)})，成交量放大',
           score: 3,
         ));
       } else {
@@ -330,7 +344,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: 'Turtle-破位',
         type: SignalType.bearish,
-        description: '价格跌破${config.breakPeriod}日低点(${recentLow.toStringAsFixed(2)})',
+        description:
+            '价格跌破${config.breakPeriod}日低点(${recentLow.toStringAsFixed(2)})',
         score: -3,
       ));
     }
@@ -372,7 +387,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: '超卖-下轨反弹',
         type: SignalType.bullish,
-        description: '价格触及布林下轨(${lowerBand.toStringAsFixed(2)})，RSI(${rsi.toStringAsFixed(1)})超卖',
+        description:
+            '价格触及布林下轨(${lowerBand.toStringAsFixed(2)})，RSI(${rsi.toStringAsFixed(1)})超卖',
         score: 3,
       ));
     } else if (lastClose <= lowerBand) {
@@ -391,7 +407,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: '超买-上轨风险',
         type: SignalType.bearish,
-        description: '价格触及布林上轨(${upperBand.toStringAsFixed(2)})，RSI(${rsi.toStringAsFixed(1)})超买',
+        description:
+            '价格触及布林上轨(${upperBand.toStringAsFixed(2)})，RSI(${rsi.toStringAsFixed(1)})超买',
         score: -2,
       ));
     }
@@ -400,7 +417,8 @@ class AnalysisEngine {
     if (closes.length >= 30) {
       // 底背离：价格新低 + RSI没新低
       final lowestClose = closes.sublist(closes.length - 20).reduce(min);
-      final rsiValues = List.generate(20, (i) => _calcRSI(closes, config.rsiPeriod, closes.length - 20 + i));
+      final rsiValues = List.generate(20,
+          (i) => _calcRSI(closes, config.rsiPeriod, closes.length - 20 + i));
       final lowestRsi = rsiValues.reduce(min);
 
       if (lastClose <= lowestClose && rsi > lowestRsi + 5) {
@@ -433,7 +451,8 @@ class AnalysisEngine {
 
   // ==================== 策略D: 量价关系 ====================
 
-  _StrategyResult _volumePriceStrategy(List<double> closes, List<double> volumes) {
+  _StrategyResult _volumePriceStrategy(
+      List<double> closes, List<double> volumes) {
     final score = _ScoreCounter();
     final signals = <Signal>[];
     final avgVolume = _calcAvgVolume(volumes, config.maLong);
@@ -520,7 +539,8 @@ class AnalysisEngine {
     final trendScore = (lastClose - currentEma) / currentAtr;
 
     // EMA斜率（判断趋势方向）
-    if (prevEma.abs() < 1e-10) return _StrategyResult(score: 0, signals: signals);
+    if (prevEma.abs() < 1e-10)
+      return _StrategyResult(score: 0, signals: signals);
     final emaSlope = (currentEma - prevEma) / prevEma;
 
     // 方向判定
@@ -544,7 +564,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: 'ATR-多头突破',
         type: SignalType.bullish,
-        description: 'ATR趋势评分${trendScore.toStringAsFixed(1)}，突破${channelWin}日通道上轨${upperChannel.toStringAsFixed(2)}',
+        description:
+            'ATR趋势评分${trendScore.toStringAsFixed(1)}，突破${channelWin}日通道上轨${upperChannel.toStringAsFixed(2)}',
         score: 3,
       ));
     } else if (isBullish) {
@@ -562,7 +583,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: 'ATR-空头破位',
         type: SignalType.bearish,
-        description: 'ATR趋势评分${trendScore.toStringAsFixed(1)}，跌破${channelWin}日通道下轨${lowerChannel.toStringAsFixed(2)}',
+        description:
+            'ATR趋势评分${trendScore.toStringAsFixed(1)}，跌破${channelWin}日通道下轨${lowerChannel.toStringAsFixed(2)}',
         score: -3,
       ));
     } else if (isBearish) {
@@ -596,13 +618,15 @@ class AnalysisEngine {
 
     // 趋势减弱（评分从高位回落）
     if (n >= period + 2) {
-      final prevScore = (closes[n - 2] - ema[n - 2]) / (atr[n - 2] > 0 ? atr[n - 2] : 1);
+      final prevScore =
+          (closes[n - 2] - ema[n - 2]) / (atr[n - 2] > 0 ? atr[n - 2] : 1);
       if (prevScore >= 1.5 && trendScore < config.atrExitScore) {
         score.add(-2);
         signals.add(Signal(
           name: 'ATR-趋势减弱',
           type: SignalType.bearish,
-          description: 'ATR评分从${prevScore.toStringAsFixed(1)}回落至${trendScore.toStringAsFixed(1)}，趋势动能衰减',
+          description:
+              'ATR评分从${prevScore.toStringAsFixed(1)}回落至${trendScore.toStringAsFixed(1)}，趋势动能衰减',
           score: -2,
         ));
       }
@@ -734,7 +758,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: 'MA20/60-金叉',
         type: SignalType.bullish,
-        description: 'MA20(${ma20Now.toStringAsFixed(2)})上穿MA60(${ma60Now.toStringAsFixed(2)})',
+        description:
+            'MA20(${ma20Now.toStringAsFixed(2)})上穿MA60(${ma60Now.toStringAsFixed(2)})',
         score: 3,
       ));
     }
@@ -745,7 +770,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: 'MA20/60-死叉',
         type: SignalType.bearish,
-        description: 'MA20(${ma20Now.toStringAsFixed(2)})下穿MA60(${ma60Now.toStringAsFixed(2)})',
+        description:
+            'MA20(${ma20Now.toStringAsFixed(2)})下穿MA60(${ma60Now.toStringAsFixed(2)})',
         score: -3,
       ));
     }
@@ -814,7 +840,8 @@ class AnalysisEngine {
         signals.add(Signal(
           name: 'KDJ-超卖金叉',
           type: SignalType.bullish,
-          description: 'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})在超卖区',
+          description:
+              'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})在超卖区',
           score: 2,
         ));
       } else if (kNow > 75) {
@@ -822,7 +849,8 @@ class AnalysisEngine {
         signals.add(Signal(
           name: 'KDJ-高位金叉',
           type: SignalType.neutral,
-          description: 'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})但处于高位',
+          description:
+              'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})但处于高位',
           score: 0.5,
         ));
       } else {
@@ -830,7 +858,8 @@ class AnalysisEngine {
         signals.add(Signal(
           name: 'KDJ-金叉',
           type: SignalType.bullish,
-          description: 'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})',
+          description:
+              'K(${kNow.toStringAsFixed(1)})上穿D(${dNow.toStringAsFixed(1)})',
           score: 1.5,
         ));
       }
@@ -843,7 +872,8 @@ class AnalysisEngine {
         signals.add(Signal(
           name: 'KDJ-超买死叉',
           type: SignalType.bearish,
-          description: 'K(${kNow.toStringAsFixed(1)})从高位下穿D(${dNow.toStringAsFixed(1)})',
+          description:
+              'K(${kNow.toStringAsFixed(1)})从高位下穿D(${dNow.toStringAsFixed(1)})',
           score: -2,
         ));
       } else {
@@ -851,7 +881,8 @@ class AnalysisEngine {
         signals.add(Signal(
           name: 'KDJ-死叉',
           type: SignalType.bearish,
-          description: 'K(${kNow.toStringAsFixed(1)})下穿D(${dNow.toStringAsFixed(1)})',
+          description:
+              'K(${kNow.toStringAsFixed(1)})下穿D(${dNow.toStringAsFixed(1)})',
           score: -1,
         ));
       }
@@ -863,7 +894,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: 'KDJ-超卖',
         type: SignalType.bullish,
-        description: 'K(${kNow.toStringAsFixed(1)}) D(${dNow.toStringAsFixed(1)})均在超卖区',
+        description:
+            'K(${kNow.toStringAsFixed(1)}) D(${dNow.toStringAsFixed(1)})均在超卖区',
         score: 1,
       ));
     }
@@ -874,7 +906,8 @@ class AnalysisEngine {
       signals.add(Signal(
         name: 'KDJ-超买',
         type: SignalType.bearish,
-        description: 'K(${kNow.toStringAsFixed(1)}) D(${dNow.toStringAsFixed(1)})均在超买区',
+        description:
+            'K(${kNow.toStringAsFixed(1)}) D(${dNow.toStringAsFixed(1)})均在超买区',
         score: -1,
       ));
     }
@@ -976,16 +1009,19 @@ class AnalysisEngine {
   }
 
   /// 计算ATR（Average True Range）
-  List<double> _calcATR(List<double> highs, List<double> lows, List<double> closes, int period) {
+  List<double> _calcATR(
+      List<double> highs, List<double> lows, List<double> closes, int period) {
     final tr = <double>[];
     for (int i = 0; i < closes.length; i++) {
       if (i == 0) {
         tr.add(highs[i] - lows[i]);
       } else {
-        final trueRange = max(highs[i] - lows[i], max(
-          (highs[i] - closes[i - 1]).abs(),
-          (lows[i] - closes[i - 1]).abs(),
-        ));
+        final trueRange = max(
+            highs[i] - lows[i],
+            max(
+              (highs[i] - closes[i - 1]).abs(),
+              (lows[i] - closes[i - 1]).abs(),
+            ));
         tr.add(trueRange);
       }
     }
@@ -1008,7 +1044,8 @@ class AnalysisEngine {
   double _calcStd(List<double> data, int period) {
     final slice = data.sublist(data.length - period);
     final mean = slice.reduce((a, b) => a + b) / period;
-    final variance = slice.map((v) => pow(v - mean, 2)).reduce((a, b) => a + b) / period;
+    final variance =
+        slice.map((v) => pow(v - mean, 2)).reduce((a, b) => a + b) / period;
     return sqrt(variance);
   }
 
@@ -1036,7 +1073,8 @@ class AnalysisEngine {
     // 寻找近期低点作为支撑，但不高于现价95%
     final recent = lows.sublist(max(0, lows.length - 20));
     recent.sort();
-    final q1 = recent.length > 3 ? recent[recent.length ~/ 4] : currentPrice * 0.95;
+    final q1 =
+        recent.length > 3 ? recent[recent.length ~/ 4] : currentPrice * 0.95;
     return min(q1, currentPrice * 0.95);
   }
 
@@ -1053,14 +1091,14 @@ class AnalysisEngine {
   Rating _calculateRating(bool trendPassed, double score) {
     // 软过滤：趋势不过时评级上限降级（最高 watch），不直接丢弃评分
     if (!trendPassed) {
-      if (score >= 0.5) return Rating.watch;
+      if (score >= AppTheme.scoreB) return Rating.watch;
       if (score >= 0) return Rating.attention;
       return Rating.avoid;
     }
-    // 阈值对齐全市场评分分布（与 PC 端一致）
-    if (score >= 1.5) return Rating.strongBuy;
-    if (score >= 1.0) return Rating.buy;
-    if (score >= 0.5) return Rating.watch;
+    // 阈值对齐全市场评分分布（与 PC 端一致，统一引用 AppTheme）
+    if (score >= AppTheme.scoreS) return Rating.strongBuy;
+    if (score >= AppTheme.scoreA) return Rating.buy;
+    if (score >= AppTheme.scoreB) return Rating.watch;
     if (score >= 0) return Rating.attention;
     return Rating.avoid;
   }
