@@ -531,9 +531,15 @@ class StockDetailPage extends StatelessWidget {
             conText = "回踩${entryLow.toStringAsFixed(2)}确认";
             sigText = "等放量";
           } else {
-            action = allowAttention ? "关注" : "等待";
-            actionColor =
-                allowAttention ? AppTheme.signalHold : AppTheme.textHint;
+            // C级(score<0.5)即使价格到区间也只观望，不提示"关注"避免误导
+            if (score >= AppTheme.scoreB) {
+              action = allowAttention ? "关注" : "等待";
+              actionColor =
+                  allowAttention ? AppTheme.signalHold : AppTheme.textHint;
+            } else {
+              action = "观望";
+              actionColor = AppTheme.textHint;
+            }
             aggText = "接近区间";
             conText = "回踩${entryLow.toStringAsFixed(2)}确认";
             sigText = "等放量";
@@ -546,9 +552,15 @@ class StockDetailPage extends StatelessWidget {
             conText = "回踩${entryLow.toStringAsFixed(2)}加仓";
             sigText = "止损${stopLoss?.toStringAsFixed(2) ?? '-'}";
           } else {
-            action = allowAttention ? "关注" : "等待";
-            actionColor =
-                allowAttention ? AppTheme.signalHold : AppTheme.textHint;
+            // C级(score<0.5)即使价格到区间也只观望，不提示"关注"避免误导
+            if (score >= AppTheme.scoreB) {
+              action = allowAttention ? "关注" : "等待";
+              actionColor =
+                  allowAttention ? AppTheme.signalHold : AppTheme.textHint;
+            } else {
+              action = "观望";
+              actionColor = AppTheme.textHint;
+            }
             aggText = "轻仓试探";
             conText = "回踩${entryLow.toStringAsFixed(2)}确认";
             sigText = "止损${stopLoss?.toStringAsFixed(2) ?? '-'}";

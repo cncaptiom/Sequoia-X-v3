@@ -13,14 +13,24 @@ import '../models/pc_recommendation.dart';
 import '../widgets/market_overview.dart';
 import '../widgets/stock_card.dart';
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   final VoidCallback? onNavigateToDetail;
   final VoidCallback? onNavigateToSearch;
 
   const HomePage({super.key, this.onNavigateToDetail, this.onNavigateToSearch});
 
   @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('股票分析'),
@@ -206,7 +216,7 @@ class HomePage extends StatelessWidget {
                       isHeld: provider.isHeld(stock.code),
                       onTap: () {
                         context.read<StockProvider>().loadStockDetail(stock);
-                        onNavigateToDetail?.call();
+                        widget.onNavigateToDetail?.call();
                       },
                       onRemove: () => _confirmRemove(context, stock, provider),
                     );
@@ -284,7 +294,7 @@ class HomePage extends StatelessWidget {
               style: TextStyle(color: AppTheme.textHint, fontSize: 14)),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: () => onNavigateToSearch?.call(),
+            onPressed: () => widget.onNavigateToSearch?.call(),
             icon: const Icon(Icons.search),
             label: const Text('搜索股票'),
             style: ElevatedButton.styleFrom(
@@ -396,11 +406,15 @@ class HomePage extends StatelessWidget {
                 if (isTop && allowBuy) {
                   actionText = '关注';
                   actionColor = AppTheme.signalHold;
-                } else if (allowAttention) {
+                } else if (score >= AppTheme.scoreB && allowAttention) {
+                  // 仅 B级及以上才提示"关注"；C级价格到区间也只是观望，避免误导
                   actionText = '关注';
                   actionColor = AppTheme.signalHold;
-                } else {
+                } else if (score >= AppTheme.scoreB) {
                   actionText = '等待';
+                  actionColor = AppTheme.textHint;
+                } else {
+                  actionText = '观望';
                   actionColor = AppTheme.textHint;
                 }
               } else {
@@ -433,7 +447,7 @@ class HomePage extends StatelessWidget {
               name: pick.name,
               market: _inferMarket(pick.symbol));
           context.read<StockProvider>().loadStockDetail(stock);
-          onNavigateToDetail?.call();
+          widget.onNavigateToDetail?.call();
         },
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -477,6 +491,23 @@ class HomePage extends StatelessWidget {
                             fontWeight: FontWeight.bold,
                             color: levelColor)),
                   ),
+                  // 持续上榜天数（≥2天显示，信号稳定性参考）
+                  if (((pick.consecutiveDays as num?)?.toInt() ?? 0) >= 2) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: AppTheme.signalHold.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text('持续${pick.consecutiveDays}天',
+                          style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w500,
+                              color: AppTheme.signalHold)),
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 6),
