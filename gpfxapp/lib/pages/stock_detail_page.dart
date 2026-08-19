@@ -587,16 +587,26 @@ class StockDetailPage extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
               const Spacer(),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: ratingColor.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: Text('$stars $label',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: ratingColor)),
+                // 星级与标签分两行，避免窄屏一行溢出/拥挤
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(stars,
+                        style: TextStyle(
+                            fontSize: 11, height: 1.1, color: ratingColor)),
+                    Text(label,
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: ratingColor)),
+                  ],
+                ),
               ),
             ],
           ),

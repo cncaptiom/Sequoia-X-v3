@@ -103,41 +103,70 @@ class WatchlistProvider extends ChangeNotifier {
     await _loadCosAuth();
   }
 
-  /// 从 COS 恢复自选股
-  Future<void> _restoreFromCloud() async {
-    try {
-      final backup = await _cos.fetchWatchlistBackup();
-      if (backup == null) return;
-      final stocks = backup['stocks'] as List?;
-      if (stocks == null || stocks.isEmpty) return;
-      for (final s in stocks) {
-        final stock = StockInfo(
-          code: s['code'] as String? ?? '',
-          name: s['name'] as String? ?? '',
-          market: s['market'] as String? ?? 'SH',
-        );
-        if (stock.code.isNotEmpty) {
-          await _storage.addToWatchlist(stock);
-          _watchlist.add(stock);
+  /// 从 COS 恢复自选股（自动恢复 + 设置页手动触发），返回恢复数量。
+  /// 重试 3 次并记录日志：重装后首次启动网络可能未就绪，避免一次性失败静默丢数据。
+  Future<int> _restoreFromCloud() async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final backup = await _cos.fetchWatchlistBackup();
+        if (backup == null) {
+          debugPrint('云端无自选股备份');
+          return 0;
+        }
+        final stocks = backup['stocks'] as List?;
+        if (stocks == null || stocks.isEmpty) {
+          debugPrint('云端自选股备份为空');
+          return 0;
+        }
+        int restored = 0;
+        for (final s in stocks) {
+          final stock = StockInfo(
+            code: s['code'] as String? ?? '',
+            name: s['name'] as String? ?? '',
+            market: s['market'] as String? ?? 'SH',
+          );
+          if (stock.code.isNotEmpty &&
+              !_watchlist.any((w) => w.code == stock.code)) {
+            await _storage.addToWatchlist(stock);
+            _watchlist.add(stock);
+            restored++;
+          }
+        }
+        if (restored > 0) notifyListeners();
+        debugPrint('已从云端恢复 $restored 只自选股');
+        return restored;
+      } catch (e) {
+        debugPrint('从云端恢复自选股失败(第${attempt + 1}/3次): $e');
+        if (attempt < 2) {
+          await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
         }
       }
-      if (stocks!.isNotEmpty) {
-        debugPrint('已从云端恢复 ${stocks.length} 只自选股');
-      }
-    } catch (_) {}
+    }
+    return 0;
   }
+
+  /// 供设置页手动触发云端恢复自选股
+  Future<int> restoreFromCloud() => _restoreFromCloud();
 
   /// 备份自选股到 COS
   Future<void> _backupToCloud() async {
     if (_watchlist.isEmpty) return;
+    // 无 COS 凭证时无法签名 PUT，备份必然失败，直接提示（避免静默丢数据）
+    if (!_cos.hasAuth) {
+      debugPrint('自选股云备份未生效：未配置 COS SecretId/SecretKey');
+      return;
+    }
     try {
-      await _cos.uploadWatchlistBackup({
+      final ok = await _cos.uploadWatchlistBackup({
         'version': 1,
-        'stocks': _watchlist.map((s) => {
-          'code': s.code, 'name': s.name, 'market': s.market,
+        'stocks': _watchlist.map((s) {
+          return {'code': s.code, 'name': s.name, 'market': s.market};
         }).toList(),
       });
-    } catch (_) {}
+      if (!ok) debugPrint('自选股云备份上传失败');
+    } catch (e) {
+      debugPrint('自选股云备份异常: $e');
+    }
   }
 
   /// 添加自选
@@ -159,7 +188,8 @@ class WatchlistProvider extends ChangeNotifier {
   /// 删除自选
   Future<void> remove(StockInfo stock) async {
     await _storage.removeFromWatchlist(stock);
-    _watchlist.removeWhere((s) => s.code == stock.code && s.market == stock.market);
+    _watchlist
+        .removeWhere((s) => s.code == stock.code && s.market == stock.market);
     _quotes.remove(stock.code);
     _analysisResults.remove(stock.code);
     _notifiedAlerts.remove(stock.code);
@@ -189,9 +219,11 @@ class WatchlistProvider extends ChangeNotifier {
       final batch = stocksToAnalyze.skip(i).take(5).toList();
       final futures = batch.map((stock) async {
         try {
-          final kline = await _api.getKLineData(stock.code, stock.market, count: 60);
+          final kline =
+              await _api.getKLineData(stock.code, stock.market, count: 60);
           if (kline.length >= 20 && _quotes.containsKey(stock.code)) {
-            return MapEntry(stock.code, engine.analyze(quote: _quotes[stock.code]!, klineData: kline));
+            return MapEntry(stock.code,
+                engine.analyze(quote: _quotes[stock.code]!, klineData: kline));
           }
         } catch (_) {}
         return null;
@@ -355,7 +387,8 @@ class WatchlistProvider extends ChangeNotifier {
   /// 为已买入股票启动定时刷新（每15秒）
   void _startHoldTimer(StockInfo stock) {
     _holdTimers[stock.code]?.cancel();
-    _holdTimers[stock.code] = Timer.periodic(const Duration(seconds: 15), (_) async {
+    _holdTimers[stock.code] =
+        Timer.periodic(const Duration(seconds: 15), (_) async {
       await _refreshSingleStock(stock);
     });
   }
@@ -392,7 +425,8 @@ class WatchlistProvider extends ChangeNotifier {
       // 无论PC端是否有覆盖，都运行本地分析引擎保持分析结果新鲜
       // 这样 StockCard 展示的分析数据（评级、信号等）始终是最新的
       try {
-        final klineData = await _api.getKLineData(stock.code, stock.market, count: 60);
+        final klineData =
+            await _api.getKLineData(stock.code, stock.market, count: 60);
         if (klineData.length >= 20) {
           final config = await _storage.getStrategyConfig();
           final engine = AnalysisEngine(config: config);
@@ -419,7 +453,8 @@ class WatchlistProvider extends ChangeNotifier {
         // 发送信号通知（仅已买入股票）
         _checkNotification(stock.name, stock.code, result, config);
         // 发送价格触达通知（已买入：止损止盈；不发送买入区间）
-        _checkPriceAlert(stock.name, stock.code, quote.currentPrice, result, config);
+        _checkPriceAlert(
+            stock.name, stock.code, quote.currentPrice, result, config);
       }
       _archiveTodaySnapshot();
       notifyListeners();
@@ -427,7 +462,8 @@ class WatchlistProvider extends ChangeNotifier {
   }
 
   /// PC端数据价格触达检查（替代本地引擎的止损止盈检查）
-  void _checkPCPriceAlert(String name, String code, double price, Map<String, dynamic> pcRec) {
+  void _checkPCPriceAlert(
+      String name, String code, double price, Map<String, dynamic> pcRec) {
     if (!_heldStocks.contains(code)) return;
     final alerts = _notifiedAlerts.putIfAbsent(code, () => {});
 
@@ -438,7 +474,8 @@ class WatchlistProvider extends ChangeNotifier {
       if (!alerts.contains(_alertStopLoss)) {
         alerts.add(_alertStopLoss);
         NotificationService().sendSignalNotification(
-          stockName: name, stockCode: code,
+          stockName: name,
+          stockCode: code,
           signalType: 'PC端止损触达',
           message: '现价 $price 触及PC端止损位 $stopLoss，建议执行止损',
         );
@@ -451,7 +488,8 @@ class WatchlistProvider extends ChangeNotifier {
       if (!alerts.contains(_alertTakeProfit)) {
         alerts.add(_alertTakeProfit);
         NotificationService().sendSignalNotification(
-          stockName: name, stockCode: code,
+          stockName: name,
+          stockCode: code,
           signalType: 'PC端止盈触达',
           message: '现价 $price 达到PC端目标价 $target1，建议执行止盈',
         );
@@ -466,20 +504,24 @@ class WatchlistProvider extends ChangeNotifier {
     try {
       final stock = _watchlist.firstWhere(
         (s) => s.code == quote.code,
-        orElse: () => StockInfo(code: quote.code, name: quote.name, market: 'SH'),
+        orElse: () =>
+            StockInfo(code: quote.code, name: quote.name, market: 'SH'),
       );
 
-      final klineData = await _api.getKLineData(stock.code, stock.market, count: 60);
+      final klineData =
+          await _api.getKLineData(stock.code, stock.market, count: 60);
       if (klineData.length >= 20) {
         final config = await _storage.getStrategyConfig();
         final engine = AnalysisEngine(config: config);
-        _analysisResults[quote.code] = engine.analyze(quote: quote, klineData: klineData);
+        _analysisResults[quote.code] =
+            engine.analyze(quote: quote, klineData: klineData);
       }
     } catch (_) {}
   }
 
   /// 检查并发送信号通知（仅已买入股票）
-  void _checkNotification(String name, String code, AnalysisResult result, StrategyConfig config) {
+  void _checkNotification(
+      String name, String code, AnalysisResult result, StrategyConfig config) {
     if (!_heldStocks.contains(code)) return;
     if (!config.notificationEnabled) return;
 
@@ -504,7 +546,8 @@ class WatchlistProvider extends ChangeNotifier {
 
   /// 检查价格触达通知（含防重复）
   /// 已买入股票：触发止损、止盈通知；不发送买入区间通知
-  void _checkPriceAlert(String name, String code, double price, AnalysisResult result, StrategyConfig config) {
+  void _checkPriceAlert(String name, String code, double price,
+      AnalysisResult result, StrategyConfig config) {
     if (!_heldStocks.contains(code)) return;
     if (!config.notificationEnabled) return;
     if (result.riskRewardRatio <= 0) return;
@@ -519,7 +562,8 @@ class WatchlistProvider extends ChangeNotifier {
         alerts.add(_alertStopLoss);
         if (config.notifyStopLoss) {
           NotificationService().sendSignalNotification(
-            stockName: name, stockCode: code,
+            stockName: name,
+            stockCode: code,
             signalType: '止损触达',
             message: '现价 $price 触及止损位 $stopLoss，建议执行止损',
           );
@@ -535,7 +579,8 @@ class WatchlistProvider extends ChangeNotifier {
         alerts.add(_alertTakeProfit);
         if (config.notifyTakeProfit) {
           NotificationService().sendSignalNotification(
-            stockName: name, stockCode: code,
+            stockName: name,
+            stockCode: code,
             signalType: '止盈触达',
             message: '现价 $price 触及止盈位 $takeProfit，建议执行止盈',
           );
@@ -551,7 +596,8 @@ class WatchlistProvider extends ChangeNotifier {
   /// A股交易时间判断（周一至周五 9:30-11:30, 13:00-15:00）
   bool _isMarketOpen() {
     final now = DateTime.now();
-    if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday) return false;
+    if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday)
+      return false;
     final hour = now.hour;
     final minute = now.minute;
     final time = hour * 100 + minute;
