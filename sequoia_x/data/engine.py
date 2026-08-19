@@ -559,7 +559,7 @@ class DataEngine:
         from datetime import date
         import time
 
-        RATE_LIMIT_DELAY = 0.05
+        RATE_LIMIT_DELAY = 0.4  # 全量重刷每只间隔 0.4s，防 baostock 限流（0.05 太激进会触发风控）
         today_str = date.today().strftime("%Y-%m-%d")
 
         def _ensure_login() -> None:
@@ -576,6 +576,7 @@ class DataEngine:
             return 0
 
         refreshed = failed = skipped = 0
+        consecutive_failures = 0
         try:
             for i, symbol in enumerate(symbols):
                 ok = False
@@ -589,12 +590,18 @@ class DataEngine:
                             frequency="d", adjustflag="2",
                         )
                     except Exception:
+                        # 网络/socket 断开（如 WinError 10054 限流踢连接）：重登 + 退避重试
                         _ensure_login()
-                        time.sleep(1.5)
+                        time.sleep(1.5 * (attempt + 1))
                         continue
                     if rs.error_code != "0":
-                        logger.warning(f"[{symbol}] baostock 查询失败: {rs.error_msg}")
-                        break
+                        # 服务端限流/风控：等待更久 + 重新登录后重试
+                        logger.warning(
+                            f"[{symbol}] baostock 查询失败(第{attempt+1}/3次): {rs.error_msg}"
+                        )
+                        _ensure_login()
+                        time.sleep(3 * (attempt + 1))
+                        continue
                     rows = []
                     while rs.next():
                         rows.append(rs.get_row_data())
@@ -625,11 +632,27 @@ class DataEngine:
                     break
                 if not ok:
                     failed += 1
+                    consecutive_failures += 1
+                else:
+                    consecutive_failures = 0
+
+                if consecutive_failures >= 15:
+                    logger.warning(
+                        f"连续 {consecutive_failures} 只失败，疑似触发限流，暂停 90s 并重连..."
+                    )
+                    bs.logout()
+                    bs.login()
+                    time.sleep(90)
+                    consecutive_failures = 0
 
                 if progress and (i + 1) % 100 == 0:
                     logger.info(
                         f"重刷进度: {i+1}/{len(symbols)} 成功{refreshed} 失败{failed} 跳过{skipped}"
                     )
+                # 定期强制重登，避免长会话被服务端静默断开
+                if (i + 1) % 500 == 0:
+                    bs.logout()
+                    bs.login()
                 time.sleep(RATE_LIMIT_DELAY)
         finally:
             bs.logout()
