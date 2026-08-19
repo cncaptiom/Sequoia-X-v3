@@ -466,7 +466,17 @@ def _run_daily(settings, logger, engine, notifier) -> None:
             from sequoia_x.analysis.technical import analyze_stock
             tech = analyze_stock(df)
             fr = factor_map.get(sym)
-            factor_str = f" [因子:PE={fr.pe:.1f} PB={fr.pb:.1f} ROE={fr.roe:.1f}%]" if fr and fr.pe else ""
+            # 防御：财务因子可能为 None（akshare 间歇性拉取失败），避免格式化崩溃
+            factor_str = ""
+            if fr is not None:
+                try:
+                    pe, pb, roe = (float(v) if v is not None else None
+                                   for v in (fr.pe, fr.pb, fr.roe))
+                    if pe is not None and pb is not None and roe is not None:
+                        factor_str = (f" [因子:PE={pe:.1f} PB={pb:.1f} "
+                                      f"ROE={roe:.1f}%]")
+                except (TypeError, ValueError):
+                    factor_str = ""
             logger.info(f"  {sym} | 趋势:{tech['trend']} | 买入:{tech['strategy']['buy_zone']} | 止损:{tech['strategy']['stop_loss']}{factor_str}")
 
         # 获取名称
