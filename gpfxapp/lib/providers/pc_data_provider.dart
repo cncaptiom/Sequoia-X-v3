@@ -25,6 +25,7 @@ class PcDataProvider extends ChangeNotifier {
 
   bool _isLoading = false;
   String? _error;
+  String? _ratingsError;
   DateTime? _lastFetch;
   // 上次拉取日期，用于判断是否已拉取过
 
@@ -33,6 +34,8 @@ class PcDataProvider extends ChangeNotifier {
   PcFullRatings? get fullRatings => _fullRatings;
   bool get isLoading => _isLoading;
   String? get error => _error;
+  /// 全量评级拉取失败时的降级提示（详情页评级可能不是最新）
+  String? get ratingsError => _ratingsError;
   DateTime? get lastFetch => _lastFetch;
 
   /// 获取指定股票的PC端评级
@@ -164,6 +167,7 @@ class PcDataProvider extends ChangeNotifier {
             'rating_stars': p.ratingStars,
             'total_score': p.totalScore,
             'consecutive_days': p.consecutiveDays,
+            'confidence': p.confidence,
             'current_price': p.currentPrice,
           }).toList(),
         });
@@ -208,68 +212,79 @@ class PcDataProvider extends ChangeNotifier {
   Future<void> refresh() async {
     _isLoading = true;
     notifyListeners();
-
-    // 三个 COS 请求独立执行、独立错误处理
-    // 摘要 — 必须成功（否则设为 error）
     try {
-      final newSummary = await _cos.fetchPortfolioSummary();
-      if (newSummary != null) {
-        _summary = newSummary;
+      // 三个 COS 请求独立执行、独立错误处理
+      bool summaryFetched = false;
+      // 摘要 — 必须成功（否则设为 error）
+      try {
+        final newSummary = await _cos.fetchPortfolioSummary();
+        if (newSummary != null) {
+          _summary = newSummary;
+          summaryFetched = true;
+        }
+      } catch (e) {
+        _error = 'PC端摘要加载失败: $e';
       }
-    } catch (e) {
-      _error = 'PC端摘要加载失败: $e';
-    }
 
-    // 全量评级 — 大文件(5MB)，失败不影响首页
-    try {
-      final newRatings = await _cos.fetchFullRatings();
-      if (newRatings != null) {
-        _fullRatings = newRatings;
-        _ratingsMap = {};
-        for (final r in _fullRatings!.ratings) {
-          _ratingsMap[r.symbol] = r;
+      bool ratingsFetched = false;
+      // 全量评级 — 大文件(5MB)，失败不影响首页
+      try {
+        final newRatings = await _cos.fetchFullRatings();
+        if (newRatings != null) {
+          _fullRatings = newRatings;
+          _ratingsMap = {};
+          for (final r in _fullRatings!.ratings) {
+            _ratingsMap[r.symbol] = r;
+          }
+          ratingsFetched = true;
+        }
+        _ratingsError = null;
+      } catch (e) {
+        // 评级加载失败不覆盖 _error，首页摘要仍可展示
+        debugPrint('全量评级加载失败（已降级）: $e');
+        _ratingsError = '评级数据加载失败，详情页评级可能不是最新';
+      }
+
+      // 策略回测 — 独立
+      try {
+        final bt = await _cos.fetchStrategyBacktest();
+        if (bt != null) _strategyBacktest = bt;
+      } catch (_) {}
+
+      // 仅当本次确实拉到新数据时清除 error 并更新时间戳（避免失败时误导"数据更新于"）
+      if (summaryFetched || ratingsFetched) {
+        _error = null;
+        _lastFetch = DateTime.now();
+      }
+
+      // 后续处理
+      _syncAutoRecommend();
+      _saveToCache();
+
+      if (_fullRatings != null && _fullRatings!.strategyConfig.isNotEmpty) {
+        try {
+          final config = await _storage.getStrategyConfig();
+          if (!await _storage.hasCustomizedStrategy()) {
+            final pcConfig = StrategyConfig.fromJson({
+              ..._fullRatings!.strategyConfig,
+              'notificationEnabled': config.notificationEnabled,
+              'notifyGoldenCross': config.notifyGoldenCross,
+              'notifyOversold': config.notifyOversold,
+              'notifyBreakout': config.notifyBreakout,
+              'notifyBuyZone': config.notifyBuyZone,
+              'notifyStopLoss': config.notifyStopLoss,
+              'notifyTakeProfit': config.notifyTakeProfit,
+            });
+            await _storage.saveStrategyConfig(pcConfig);
+          }
+        } catch (e) {
+          debugPrint('PC端策略配置同步失败: $e');
         }
       }
-    } catch (e) {
-      // 评级加载失败不覆盖 _error，首页摘要仍可展示
-      debugPrint('全量评级加载失败（已降级）: $e');
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
-
-    // 策略回测 — 独立
-    try {
-      final bt = await _cos.fetchStrategyBacktest();
-      if (bt != null) _strategyBacktest = bt;
-    } catch (_) {}
-
-    // 只要摘要或评级任意有数据就清除 error
-    if (_summary != null || _fullRatings != null) {
-      _error = null;
-      _lastFetch = DateTime.now();
-    }
-
-    // 后续处理
-    _syncAutoRecommend();
-    _saveToCache();
-
-    if (_fullRatings != null && _fullRatings!.strategyConfig.isNotEmpty) {
-      final config = await _storage.getStrategyConfig();
-      if (!await _storage.hasCustomizedStrategy()) {
-        final pcConfig = StrategyConfig.fromJson({
-          ..._fullRatings!.strategyConfig,
-          'notificationEnabled': config.notificationEnabled,
-          'notifyGoldenCross': config.notifyGoldenCross,
-          'notifyOversold': config.notifyOversold,
-          'notifyBreakout': config.notifyBreakout,
-          'notifyBuyZone': config.notifyBuyZone,
-          'notifyStopLoss': config.notifyStopLoss,
-          'notifyTakeProfit': config.notifyTakeProfit,
-        });
-        await _storage.saveStrategyConfig(pcConfig);
-      }
-    }
-
-    _isLoading = false;
-    notifyListeners();
   }
 
   // ── COS 配置管理 ──

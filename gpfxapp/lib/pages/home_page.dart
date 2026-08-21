@@ -126,6 +126,18 @@ class _HomePageState extends State<HomePage>
                             style: const TextStyle(
                                 fontSize: 10, color: AppTheme.textHint)),
                       ),
+                    // ratings 拉取失败降级提示（详情页评级可能不是最新）
+                    if (pcProvider.ratingsError != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 2),
+                        child: Text(
+                          '⚠️ ${pcProvider.ratingsError}',
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: AppTheme.signalHold.withOpacity(0.9)),
+                        ),
+                      ),
                     if (picks.isEmpty && !isLoading)
                       // 无数据时引导提示
                       Container(
@@ -491,6 +503,22 @@ class _HomePageState extends State<HomePage>
                             fontWeight: FontWeight.bold,
                             color: levelColor)),
                   ),
+                  // 置信度（与飞书排序依据一致，>0 才显示）
+                  if (((pick.confidence as num?)?.toDouble() ?? 0) > 0) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryDark.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                          '${(((pick.confidence as num?)?.toDouble() ?? 0) * 100).round()}%',
+                          style: const TextStyle(
+                              fontSize: 9, color: AppTheme.textHint)),
+                    ),
+                  ],
                   // 持续上榜天数（≥2天显示，信号稳定性参考）
                   if (((pick.consecutiveDays as num?)?.toInt() ?? 0) >= 2) ...[
                     const SizedBox(width: 4),

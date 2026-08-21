@@ -60,7 +60,11 @@ class PcRatingResult {
 
   static Map<String, double> _parseStringDoubleMap(dynamic raw) {
     if (raw is Map) {
-      return raw.map((k, v) => MapEntry(k.toString(), (v as num).toDouble()));
+      return raw.map((k, v) {
+        // 容错：单条脏数据（null/字符串）不拖垮整个评级文件
+        final n = v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '');
+        return MapEntry(k.toString(), n ?? 0);
+      });
     }
     return {};
   }
@@ -127,7 +131,11 @@ class PcPortfolioSummary {
       generatedAt: json['generated_at'] as String? ?? '',
       marketRegime: json['market_regime'] as String? ?? '',
       suggestedExposure: (json['suggested_exposure'] as num?)?.toDouble() ?? 0,
-      ratingSummary: rawSummary.map((k, v) => MapEntry(k, (v as num).toInt())),
+      ratingSummary: rawSummary.map((k, v) {
+        // 容错：单条脏数据（null/字符串）不拖垮整个评级文件
+        final n = v is num ? v.toInt() : int.tryParse(v?.toString() ?? '');
+        return MapEntry(k, n ?? 0);
+      }),
       topPicks: (json['top_picks'] as List?)
               ?.map((e) => PcTopPick.fromJson(e as Map<String, dynamic>))
               .toList() ??
@@ -146,6 +154,7 @@ class PcTopPick {
   final double totalScore;
   final double currentPrice;
   final int consecutiveDays;
+  final double confidence;
 
   PcTopPick({
     required this.symbol,
@@ -156,6 +165,7 @@ class PcTopPick {
     required this.totalScore,
     required this.currentPrice,
     this.consecutiveDays = 1,
+    this.confidence = 0,
   });
 
   factory PcTopPick.fromJson(Map<String, dynamic> json) {
@@ -168,6 +178,7 @@ class PcTopPick {
       totalScore: (json['total_score'] as num?)?.toDouble() ?? 0,
       currentPrice: (json['current_price'] as num?)?.toDouble() ?? 0,
       consecutiveDays: (json['consecutive_days'] as num?)?.toInt() ?? 1,
+      confidence: (json['confidence'] as num?)?.toDouble() ?? 0,
     );
   }
 }
