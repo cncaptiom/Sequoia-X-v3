@@ -488,12 +488,15 @@ class _CosAuthSection extends StatelessWidget {
                     final wl = context.read<WatchlistProvider>();
                     final restored = await wl.restoreFromCloud();
                     if (context.mounted) {
+                      final msg = restored > 0
+                          ? '已恢复 $restored 只自选股'
+                          : (wl.lastRestoreError != null
+                              ? '恢复失败: ${wl.lastRestoreError}'
+                              : '云端无自选股备份');
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text(restored > 0
-                              ? '已恢复 $restored 只自选股'
-                              : '云端无备份或恢复失败'),
-                          duration: const Duration(seconds: 3),
+                          content: Text(msg),
+                          duration: const Duration(seconds: 4),
                         ),
                       );
                     }

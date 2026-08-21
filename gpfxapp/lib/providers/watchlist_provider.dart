@@ -104,18 +104,24 @@ class WatchlistProvider extends ChangeNotifier {
   }
 
   /// 从 COS 恢复自选股（自动恢复 + 设置页手动触发），返回恢复数量。
+  /// 上次云端恢复失败的原因（供设置页展示诊断）
+  String? lastRestoreError;
+
   /// 重试 3 次并记录日志：重装后首次启动网络可能未就绪，避免一次性失败静默丢数据。
   Future<int> _restoreFromCloud() async {
+    lastRestoreError = null;
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
         final backup = await _cos.fetchWatchlistBackup();
         if (backup == null) {
-          debugPrint('云端无自选股备份');
+          lastRestoreError = '云端无自选股备份或读取失败';
+          debugPrint(lastRestoreError!);
           return 0;
         }
         final stocks = backup['stocks'] as List?;
         if (stocks == null || stocks.isEmpty) {
-          debugPrint('云端自选股备份为空');
+          lastRestoreError = '云端自选股备份为空';
+          debugPrint(lastRestoreError!);
           return 0;
         }
         int restored = 0;
@@ -136,6 +142,7 @@ class WatchlistProvider extends ChangeNotifier {
         debugPrint('已从云端恢复 $restored 只自选股');
         return restored;
       } catch (e) {
+        lastRestoreError = e.toString();
         debugPrint('从云端恢复自选股失败(第${attempt + 1}/3次): $e');
         if (attempt < 2) {
           await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
