@@ -53,23 +53,31 @@ class FeishuNotifier:
         """通过 baostock 批量查询股票名称，返回 {code: name} 映射。
 
         使用无参 query_stock_basic() 一次拉取全量，避免逐只查询导致4000+次API调用。
+        任何 baostock 故障都兜底用 code 本身，不向上抛异常（避免飞书推送被网络/数据源拖垮）。
         """
-        import baostock as bs
-        bs.login()
-        all_names = {}
+        all_names: dict[str, str] = {}
         try:
-            rs = bs.query_stock_basic(code_name="", code="")
-            while rs.next():
-                row = rs.get_row_data()
-                raw_code = row[0]      # "sh.600000" 或 "sz.000001"
-                name = row[1]          # 股票名称
-                status = row[4]        # "1" = 上市
-                stock_type = row[5]    # "1" = 股票
-                if status == "1" and stock_type == "1":
-                    pure_code = raw_code.split(".")[1]
-                    all_names[pure_code] = name
-        finally:
-            bs.logout()
+            import baostock as bs
+            lg = bs.login()
+            if lg.error_code != "0":
+                return {c: c for c in symbols}
+            try:
+                rs = bs.query_stock_basic(code_name="", code="")
+                if rs is None:
+                    return {c: c for c in symbols}
+                while rs.next():
+                    row = rs.get_row_data()
+                    raw_code = row[0]      # "sh.600000" 或 "sz.000001"
+                    name = row[1]          # 股票名称
+                    status = row[4]        # "1" = 上市
+                    stock_type = row[5]    # "1" = 股票
+                    if status == "1" and stock_type == "1":
+                        pure_code = raw_code.split(".")[1]
+                        all_names[pure_code] = name
+            finally:
+                bs.logout()
+        except Exception:
+            pass
         # 只返回需要的股票名称
         return {c: all_names.get(c, c) for c in symbols}
 

@@ -23,7 +23,15 @@ engine = DataEngine(settings)
 for code, bs_code in BENCHMARKS.items():
     logger.info(f"回填 {bs_code} ({code})...")
     try:
-        engine.backfill([code])
+        # 先删除旧数据：000905 曾因 _to_baostock_code 前缀映射错误被写入 sz.000905 的股票数据
+        import sqlite3
+        with sqlite3.connect(engine.db_path) as conn:
+            deleted = conn.execute(
+                "DELETE FROM stock_daily WHERE symbol=?", (code,)
+            ).rowcount
+        if deleted:
+            logger.info(f"  已清理 {code} 旧错误数据 {deleted} 行")
+        engine.backfill([code], bs_code_map={code: bs_code})
         logger.info(f"  {code} 完成")
     except Exception as e:
         logger.error(f"  {code} 失败: {e}")

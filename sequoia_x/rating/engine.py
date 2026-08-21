@@ -414,14 +414,14 @@ class RatingEngine:
              lambda: fundamental_strategy(df, financial)),
         ]
 
-        for name, enabled, fn in strategy_map:
+        for strategy_key, enabled, fn in strategy_map:
             if enabled:
                 try:
                     result = fn()
-                    strategy_scores[name] = result.score
+                    strategy_scores[strategy_key] = result.score
                     signals.extend(result.signals)
                 except Exception as exc:
-                    logger.log(5, f"策略 [{name}] 执行异常: {exc}")
+                    logger.log(5, f"策略 [{strategy_key}] 执行异常: {exc}")
                     continue
 
         # ── 策略正交化 + 配置权重驱动评分（组合逻辑统一在 _combine_scores） ──
@@ -490,6 +490,30 @@ class RatingEngine:
         if total == 0:
             return {}
         return {k: v / total for k, v in filtered.items()}
+
+    def _apply_ic_decay_weights(self, ic_tracker) -> None:
+        """IC 衰减降权：检测到 IC 衰减的策略权重打折后重新归一化。
+
+        在扫描前调用（与 apply_ir_weights 互补），确保衰减策略本轮即被降权。
+        """
+        try:
+            base = self._get_normalized_weights()
+            adjusted = ic_tracker.adjust_weights(base)
+            if not adjusted:
+                return
+            for k, w in adjusted.items():
+                snake = self.config.IR_STRATEGY_MAP.get(k)
+                attr = self.config.WEIGHT_ATTRS.get(snake)
+                if attr:
+                    object.__setattr__(self.config, attr, round(w, 4))
+            total = sum(float(getattr(self.config, a))
+                        for a in self.config.WEIGHT_ATTRS.values())
+            if total > 0:
+                for attr in self.config.WEIGHT_ATTRS.values():
+                    object.__setattr__(self.config, attr,
+                                       round(float(getattr(self.config, attr)) / total, 4))
+        except Exception as exc:
+            logger.log(5, f"IC 衰减调权失败: {exc}")
 
     def _strategy_weight(self, strategy_key: str) -> float:
         """读取策略的配置权重（camelCase 评分名 → config.weight_* 属性）。"""
@@ -756,6 +780,8 @@ class RatingEngine:
                     for k, attr in self.config.WEIGHT_ATTRS.items()
                 }
                 self.config.apply_ir_weights(ir_summary)
+                # IC 衰减降权（与 IR 加权互补）：检测到衰减的策略本轮即降权
+                self._apply_ic_decay_weights(ic_tracker)
                 new_weights = {
                     k: getattr(self.config, attr)
                     for k, attr in self.config.WEIGHT_ATTRS.items()

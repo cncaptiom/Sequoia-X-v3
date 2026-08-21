@@ -222,6 +222,7 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
                 "rating_label": rating_label_map.get(s.symbol, "S级" if s.confidence >= 0.75 else "A级" if s.confidence >= 0.60 else "关注"),
                 "rating_stars": rating_stars_map.get(s.symbol, "★★★★★" if s.confidence >= 0.75 else "★★★★" if s.confidence >= 0.60 else "★★★"),
                 "total_score": rating_score_map.get(s.symbol, s.confidence * 10),
+                "confidence": round(s.confidence, 3),
                 "current_price": s.current_price,
             } for s in sorted(signals, key=lambda x: x.confidence, reverse=True)[:10]]
         elif rating_results:
@@ -229,7 +230,8 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
                 "symbol": r.symbol, "name": r.name,
                 "rating": r.rating, "rating_label": r.rating_label,
                 "rating_stars": r.rating_stars,
-                "total_score": r.total_score, "current_price": r.current_price,
+                "total_score": r.total_score, "confidence": 0.0,
+                "current_price": r.current_price,
             } for r in rating_results[:10]]
 
         # ── 持续天数追踪 ──
@@ -665,22 +667,6 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     # 计算 IC（处理 pending 快照）
     ic_tracker.eval_forward_returns(engine, lookforward_days=5)
     ic_tracker.eval_forward_returns(engine, lookforward_days=20)
-
-    # 根据 IC 调整权重（检测到衰减的策略降权）
-    base_weights = rating_engine._get_normalized_weights()
-    adjusted = ic_tracker.adjust_weights(base_weights)
-    # _get_normalized_weights 返回 CamelCase（"maVolume"），WEIGHT_ATTRS 用 snake_case
-    _CAMEL_TO_SNAKE = {"maVolume": "ma_volume", "turtleTrade": "turtle_trade",
-                       "meanReversion": "mean_reversion", "volumePrice": "volume_price",
-                       "atrChannel": "atr_channel", "macdRsi": "macd_rsi",
-                       "maCross": "ma_cross", "kdj": "kdj"}
-    for s, w in adjusted.items():
-        attr = RatingConfig.WEIGHT_ATTRS.get(_CAMEL_TO_SNAKE.get(s, s))
-        if attr:
-            current = getattr(rating_config, attr, w)
-            if abs(current - w) > 0.01:
-                object.__setattr__(rating_config, attr, round(w, 4))
-    logger.info(f"IC调整后权重: {adjusted}")
 
     # 打印 IC 质量报告
     ic_tracker.print_summary()

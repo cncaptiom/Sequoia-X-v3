@@ -24,28 +24,40 @@ class CosUploader:
     """腾讯云 COS 上传器（封装官方 SDK）。"""
 
     def __init__(self, bucket: str, region: str, secret_id: str, secret_key: str,
-                 timeout: int = 60):
+                 timeout: int = 120):
         self.bucket = bucket
         self.region = region
         self.timeout = timeout
         config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key,
                            Timeout=timeout)
         self.client = CosS3Client(config)
+        # 绕过系统代理（Clash 等会对 >~100KB 的 body 断流），COS 公网直连更快更稳。
+        # 实测默认走 127.0.0.1:7897 代理时大文件上传必然 ProxyError/10054，直连 2.8MB 仅 0.7s。
+        self.client._session.trust_env = False
 
-    def _put_json(self, path: str, data: dict[str, Any]) -> bool:
-        """上传 JSON 数据到 COS 指定路径。"""
-        try:
-            body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-            response = self.client.put_object(
-                Bucket=self.bucket,
-                Body=body,
-                Key=path,
-            )
-            logger.info(f"COS上传成功: {path} ({len(body)} bytes)")
-            return True
-        except Exception as exc:
-            logger.error(f"COS上传失败 {path}: {exc}")
-            return False
+    def _put_json(self, path: str, data: dict[str, Any], retries: int = 3) -> bool:
+        """上传 JSON 数据到 COS 指定路径（带指数退避重试，兜底网络抖动）。"""
+        body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        for attempt in range(retries):
+            try:
+                self.client.put_object(
+                    Bucket=self.bucket,
+                    Body=body,
+                    Key=path,
+                )
+                logger.info(f"COS上传成功: {path} ({len(body)} bytes)")
+                return True
+            except Exception as exc:
+                if attempt < retries - 1:
+                    delay = 2 ** attempt * 2
+                    logger.warning(
+                        f"COS上传失败 {path} (第{attempt + 1}/{retries}次): {exc}，{delay}s后重试"
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(f"COS上传失败 {path}（已重试{retries}次）: {exc}")
+                    return False
+        return False
 
     @staticmethod
     def _today() -> str:

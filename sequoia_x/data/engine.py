@@ -5,6 +5,7 @@
 
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from datetime import date, timedelta
 from typing import Optional
@@ -206,7 +207,7 @@ class DataValidator:
     def compute_staleness_report(db_path: str) -> dict:
         """生成数据新鲜度报告。"""
         cutoff = (date.today() - timedelta(days=5)).isoformat()
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn:
             total = conn.execute(
                 "SELECT COUNT(DISTINCT symbol) FROM stock_daily"
             ).fetchone()[0]
@@ -325,7 +326,7 @@ class DataValidator:
         """
         import sqlite3
         report = {}
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn:
             report["total_symbols"] = conn.execute("SELECT COUNT(DISTINCT symbol) FROM stock_daily").fetchone()[0]
             report["total_rows"] = conn.execute("SELECT COUNT(*) FROM stock_daily").fetchone()[0]
             row = conn.execute("SELECT MIN(date), MAX(date) FROM stock_daily").fetchone()
@@ -423,14 +424,14 @@ class DataEngine:
 
     def _init_db(self) -> None:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
             conn.commit()
         logger.info(f"数据库初始化完成：{self.db_path}")
 
     def _get_last_date(self, symbol: str) -> str | None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute(
                 "SELECT MAX(date) FROM stock_daily WHERE symbol = ?",
                 (symbol,),
@@ -438,7 +439,7 @@ class DataEngine:
         return row[0] if row and row[0] else None
 
     def get_ohlcv(self, symbol: str) -> pd.DataFrame:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             df = pd.read_sql(
                 "SELECT * FROM stock_daily WHERE symbol = ? ORDER BY date",
                 conn,
@@ -528,7 +529,7 @@ class DataEngine:
         """
         from datetime import date, timedelta
         cutoff = (date.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             rows = conn.execute(
                 """
                 SELECT DISTINCT symbol FROM (
@@ -623,7 +624,7 @@ class DataEngine:
                     df = df.rename(columns={"amount": "turnover"})
                     df = df[["symbol", "date", "open", "high", "low", "close",
                              "volume", "turnover"]]
-                    with sqlite3.connect(self.db_path) as conn:
+                    with closing(sqlite3.connect(self.db_path)) as conn:
                         conn.execute("DELETE FROM stock_daily WHERE symbol = ?", (symbol,))
                         df.to_sql("stock_daily", conn, if_exists="append", index=False)
                         conn.commit()
@@ -680,7 +681,7 @@ class DataEngine:
         today_str = date.today().strftime("%Y-%m-%d")
 
         tasks = []
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             rows = conn.execute(
                 "SELECT symbol, MAX(date) FROM stock_daily GROUP BY symbol"
             ).fetchall()
@@ -831,7 +832,7 @@ class DataEngine:
         df = df[df["volume"] > 0]
 
         count = len(df)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             for d in df["date"].unique().tolist():
                 batch_symbols = df.loc[df["date"] == d, "symbol"].tolist()
                 if batch_symbols:
@@ -851,8 +852,16 @@ class DataEngine:
         logger.info(f"sync_today_bulk: 写入 {count} 条数据")
         return count
 
-    def backfill(self, symbols: list[str]) -> None:
-        """通过 baostock 批量回填历史日 K 线数据（前复权）。已入库的自动 skip，断网自动重试。"""
+    def backfill(self, symbols: list[str],
+                 bs_code_map: dict[str, str] | None = None) -> None:
+        """通过 baostock 批量回填历史日 K 线数据（前复权）。已入库的自动 skip，断网自动重试。
+
+        Args:
+            symbols: 股票代码列表。
+            bs_code_map: 可选，{symbol: bs_code} 覆盖默认前缀映射。用于指数等
+                _to_baostock_code 无法正确映射的代码（如 000905 中证500 应为 sh.000905，
+                而默认规则会映射成 sz.000905）。
+        """
         import baostock as bs
         from datetime import date, timedelta
         import time
@@ -931,7 +940,7 @@ class DataEngine:
                 if last_date:
                     start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime("%Y-%m-%d")
 
-                bs_code = self._to_baostock_code(symbol)
+                bs_code = (bs_code_map or {}).get(symbol) or self._to_baostock_code(symbol)
                 rows = _query_with_retry(bs_code, start, today_str)
 
                 if not rows:
@@ -955,7 +964,7 @@ class DataEngine:
                 df = df[["symbol", "date", "open", "high", "low", "close", "volume", "turnover"]]
 
                 try:
-                    with sqlite3.connect(self.db_path) as conn:
+                    with closing(sqlite3.connect(self.db_path)) as conn:
                         df.to_sql("stock_daily", conn, if_exists="append", index=False)
                 except sqlite3.IntegrityError:
                     logger.log(5, f"[已跳过] {symbol} 重复数据")
@@ -1008,7 +1017,7 @@ class DataEngine:
                 bs.logout()
 
     def get_local_symbols(self) -> list[str]:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             rows = conn.execute(
                 "SELECT DISTINCT symbol FROM stock_daily"
             ).fetchall()
@@ -1044,7 +1053,7 @@ class DataEngine:
         BATCH_SIZE = 500
         all_dfs = []
 
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             for i in range(0, len(symbols), BATCH_SIZE):
                 batch = symbols[i:i + BATCH_SIZE]
                 placeholders = ",".join(["?"] * len(batch))
@@ -1122,7 +1131,7 @@ class DataEngine:
                     batch_df[col] = pd.to_numeric(batch_df[col], errors="coerce")
                 batch_df = batch_df.dropna(subset=["close"])
 
-                with sqlite3.connect(self.db_path) as conn:
+                with closing(sqlite3.connect(self.db_path)) as conn:
                     for d in batch_df["date"].unique():
                         syms = batch_df.loc[batch_df["date"] == d, "symbol"].tolist()
                         if syms:
@@ -1199,7 +1208,7 @@ class DataEngine:
         df = df[df["volume"] > 0]
 
         count = len(df)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             for d in df["date"].unique().tolist():
                 batch_symbols = df.loc[df["date"] == d, "symbol"].tolist()
                 if batch_symbols:
@@ -1214,7 +1223,7 @@ class DataEngine:
 
     def get_latest_trading_date(self) -> Optional[str]:
         """获取数据库中最新的交易日。"""
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute("SELECT MAX(date) FROM stock_daily").fetchone()
         return row[0] if row else None
 
@@ -1259,7 +1268,7 @@ class DataEngine:
             ORDER BY symbol, date
         """
 
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             df = pd.read_sql(query, conn, params=params)
 
         if df.empty:
