@@ -35,6 +35,10 @@ def test_strategy_run_returns_list_of_str(symbols: list[str]) -> None:
             with patch.object(engine, "get_ohlcv", return_value=pd.DataFrame()):
                 strategy = MaVolumeStrategy(engine=engine, settings=settings)
                 result = strategy.run()
+        del strategy
+        del engine
+        import gc
+        gc.collect()
 
     assert isinstance(result, list)
     assert all(isinstance(s, str) and len(s) > 0 for s in result)

@@ -40,7 +40,8 @@ def test_unique_symbol_date_constraint(symbol: str, trade_date: date) -> None:
             "volume": 1000.0, "turnover": 10500.0,
         }
         df = pd.DataFrame([row])
-        with sqlite3.connect(engine.db_path) as conn:
+        conn = sqlite3.connect(engine.db_path)
+        try:
             df.to_sql("stock_daily", conn, if_exists="append", index=False, method="multi")
             try:
                 df.to_sql("stock_daily", conn, if_exists="append", index=False, method="multi")
@@ -50,4 +51,6 @@ def test_unique_symbol_date_constraint(symbol: str, trade_date: date) -> None:
                 "SELECT COUNT(*) FROM stock_daily WHERE symbol=? AND date=?",
                 (symbol, str(trade_date)),
             ).fetchone()[0]
+        finally:
+            conn.close()  # 显式关闭，避免 Windows 下临时文件被占用
         assert count == 1

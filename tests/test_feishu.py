@@ -12,6 +12,15 @@ from sequoia_x.core.config import Settings
 from sequoia_x.notify.feishu import FeishuNotifier
 
 
+@pytest.fixture(autouse=True)
+def _no_baostock(monkeypatch):
+    """屏蔽 baostock 真实调用：_get_stock_names 兜底用 code，避免慢网络拖垮测试。"""
+    monkeypatch.setattr(
+        FeishuNotifier, "_get_stock_names",
+        staticmethod(lambda symbols: {c: c for c in symbols}),
+    )
+
+
 def make_settings(webhook_url: str = "https://example.com/default") -> Settings:
     return Settings(
         db_path="data/test.db",
