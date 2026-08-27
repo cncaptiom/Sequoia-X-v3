@@ -107,9 +107,16 @@ def _track_consecutive(top_picks: list[dict]):
 
     数据存储在 output/consecutive_tracker.json：
       { "stocks": {"000429": {"days": 5, "last_date": "2026-07-04"}} }
+
+    断档判定：距上次上榜超过 _MAX_STREAK_GAP_DAYS 个自然日（覆盖周末与常见小长假，
+    如周五→周一为 3 天）视为中断，days 重置为 1，避免"累计出现天数"虚高
+    （如消失一个月再出现仍显示"持续N天"）。
     """
     import json, os
-    from datetime import date
+    from datetime import date, timedelta
+
+    # 超过该天数未上榜即视为断档；周末（周五→周一=3天）+ 小长假容差
+    _MAX_STREAK_GAP_DAYS = 4
 
     tracker_path = "output/consecutive_tracker.json"
     tracker: dict = {"stocks": {}}
@@ -121,6 +128,7 @@ def _track_consecutive(top_picks: list[dict]):
             pass
 
     today = date.today().isoformat()
+    floor = (date.today() - timedelta(days=_MAX_STREAK_GAP_DAYS)).isoformat()
     stocks = tracker.setdefault("stocks", {})
 
     # 为当前 top_picks 中的每只股票更新持续天数
@@ -129,9 +137,13 @@ def _track_consecutive(top_picks: list[dict]):
         sym = pick["symbol"]
         symbols_today.add(sym)
         entry = stocks.get(sym, {"days": 0})
-        if entry.get("last_date") == today:
+        last = entry.get("last_date")
+        if last == today:
             # 同一天多次运行，不重复计数
             pass
+        elif last is None or last < floor:
+            # 首次上榜或断档超过容忍天数 → 重置为连续第 1 天
+            entry["days"] = 1
         else:
             entry["days"] = entry.get("days", 0) + 1
         entry["last_date"] = today
@@ -695,6 +707,7 @@ def _run_rating(settings, logger, engine, notifier) -> None:
             "rating_label": r.rating_label,
             "total_score": r.total_score,
             "strategy_scores": r.strategy_scores,
+            "per_strategy_scores": r.per_strategy_scores,
             "category_scores": r.category_scores,
             "current_price": r.current_price,
             "stop_loss": r.stop_loss_price,

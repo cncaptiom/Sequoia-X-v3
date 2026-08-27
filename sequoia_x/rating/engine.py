@@ -301,6 +301,8 @@ class AnalysisResult:
     total_score: float = 0.0
     rating: str = Rating.avoid
     strategy_scores: dict[str, float] = field(default_factory=dict)
+    # 各策略标准化分（截面 Z-score，非类内平均），供手机端展示策略间差异；不参与评分
+    per_strategy_scores: dict[str, float] = field(default_factory=dict)
     # 各策略原始分（正交化前），供 IC 追踪使用；不用于手机端展示
     raw_strategy_scores: dict[str, float] = field(default_factory=dict)
     category_scores: dict[str, float] = field(default_factory=dict)
@@ -331,6 +333,7 @@ class AnalysisResult:
             "trend_passed": self.trend_passed,
             "trend_description": self.trend_description,
             "strategy_scores": {k: round(v, 1) for k, v in self.strategy_scores.items()},
+            "per_strategy_scores": {k: round(v, 1) for k, v in self.per_strategy_scores.items()},
             "category_scores": {k: round(v, 1) for k, v in self.category_scores.items()},
             "signals": self.signals[:5],
             "risk_reward_ratio": round(self.risk_reward_ratio, 2),
@@ -587,6 +590,7 @@ class RatingEngine:
             total, ortho, cat = self._combine_scores(std_scores)
             r.total_score = round(total, 1)
             r.strategy_scores = {k: round(v, 1) for k, v in ortho.items()}
+            r.per_strategy_scores = {k: round(v, 1) for k, v in std_scores.items()}
             r.category_scores = cat
             r.rating = self._calculate_rating(r.trend_passed, total)
 
@@ -647,6 +651,54 @@ class RatingEngine:
         current = float(df["close"].iloc[-1])
         return max(q3, current * 1.03)
 
+    # baostock 财务查询：网络类错误码才触发重连；"无数据"等正常错误码不重连
+    _BS_NETWORK_ERRORS = frozenset({
+        "10001001", "10002001", "10002002", "10002003", "10002004",
+        "10002005", "10002006", "10002007", "10002008",
+    })
+    _BS_QUERY_INTERVAL = 0.15  # 财务查询节流间隔（秒），控制请求频率避免被限流踢线
+    _bs_last_query_ts = 0.0
+
+    @classmethod
+    def _bs_throttle(cls) -> None:
+        """两次 baostock 查询间至少间隔 _BS_QUERY_INTERVAL，降低被服务端踢连接的概率。"""
+        import time
+        now = time.monotonic()
+        wait = cls._bs_last_query_ts + cls._BS_QUERY_INTERVAL - now
+        if wait > 0:
+            time.sleep(wait)
+        cls._bs_last_query_ts = time.monotonic()
+
+    @classmethod
+    def _bs_query_with_reconnect(cls, query_fn, *args, **kwargs):
+        """执行 baostock 查询；连接被服务端断开（WinError 10054 等）时 logout+login 重试。
+
+        网络类错误码（10xx/1002xxxx）或抛异常才重连；无数据等正常错误码直接返回。
+        """
+        import baostock as bs
+        import time
+        rs = None
+        for attempt in range(3):
+            cls._bs_throttle()
+            try:
+                rs = query_fn(*args, **kwargs)
+            except Exception:
+                rs = None
+            if rs is not None and str(getattr(rs, "error_code", "0")) == "0":
+                return rs
+            err = getattr(rs, "error_code", None) if rs is not None else None
+            is_network = rs is None or str(err) in cls._BS_NETWORK_ERRORS
+            if not is_network:
+                return rs  # 无数据等正常错误码：重试无意义，直接返回
+            if attempt < 2:
+                try:
+                    bs.logout()
+                    bs.login()
+                except Exception:
+                    pass
+                time.sleep(1.0 * (attempt + 1))  # 退避后重试
+        return rs
+
     def _fetch_financial(self, symbol: str) -> dict | None:
         """获取股票财务数据（带缓存 + 单次 baostock 登录，每只股票最多3次查询）。"""
         if symbol in self._financial_cache:
@@ -677,7 +729,9 @@ class RatingEngine:
             # 只查最新一个季度（减少 baostock 查询量，避免限流）
             for year_candidate in [yr, yr - 1]:
                 for q in [4, 3, 2, 1]:
-                    rs = bs.query_profit_data(code=bs_code, year=year_candidate, quarter=q)
+                    rs = self._bs_query_with_reconnect(
+                        bs.query_profit_data, code=bs_code, year=year_candidate, quarter=q
+                    )
                     if rs.error_code == "0" and rs.next():
                         d = dict(zip(rs.fields, rs.get_row_data()))
                         if d.get("roeAvg"):
@@ -691,7 +745,9 @@ class RatingEngine:
             # 净利润增长率（只查一次）
             for year_candidate in [yr, yr - 1]:
                 for q in [4, 3, 2, 1]:
-                    rs = bs.query_growth_data(code=bs_code, year=year_candidate, quarter=q)
+                    rs = self._bs_query_with_reconnect(
+                        bs.query_growth_data, code=bs_code, year=year_candidate, quarter=q
+                    )
                     if rs.error_code == "0" and rs.next():
                         d = dict(zip(rs.fields, rs.get_row_data()))
                         if d.get("YOYNI"):
@@ -703,7 +759,9 @@ class RatingEngine:
             # 现金流（只查一次）
             for year_candidate in [yr, yr - 1]:
                 for q in [4, 3, 2, 1]:
-                    rs = bs.query_cash_flow_data(code=bs_code, year=year_candidate, quarter=q)
+                    rs = self._bs_query_with_reconnect(
+                        bs.query_cash_flow_data, code=bs_code, year=year_candidate, quarter=q
+                    )
                     if rs.error_code == "0" and rs.next():
                         d = dict(zip(rs.fields, rs.get_row_data()))
                         if d.get("CFOToNP"):

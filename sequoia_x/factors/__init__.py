@@ -182,6 +182,40 @@ class FactorCalculator:
 
         return result
 
+    # baostock 网络类错误码：连接被服务端断开/未登录等（与 RatingEngine 一致）
+    _BS_NETWORK_ERRORS = frozenset({
+        "10001001", "10002001", "10002002", "10002003", "10002004",
+        "10002005", "10002006", "10002007", "10002008",
+    })
+
+    def _bs_query_with_reconnect(self, query_fn, *args, **kwargs):
+        """执行 baostock 查询；连接被断开（WinError 10054 等）时 logout+login 重试。
+
+        网络类错误码或抛异常才重连；"无数据"等正常错误码直接返回不重试。
+        """
+        import baostock as bs
+        import time
+        rs = None
+        for attempt in range(3):
+            try:
+                rs = query_fn(*args, **kwargs)
+            except Exception:
+                rs = None
+            if rs is not None and str(getattr(rs, "error_code", "0")) == "0":
+                return rs
+            err = getattr(rs, "error_code", None) if rs is not None else None
+            is_network = rs is None or str(err) in self._BS_NETWORK_ERRORS
+            if not is_network:
+                return rs  # 无数据等正常错误码：重试无意义，直接返回
+            if attempt < 2:
+                try:
+                    bs.logout()
+                    bs.login()
+                except Exception:
+                    pass
+                time.sleep(1.0 * (attempt + 1))  # 退避后重试
+        return rs
+
     def _get_fundamental(self, symbol: str) -> Optional[dict]:
         """通过 baostock 获取基本面数据（带缓存）。"""
         if symbol in self._fundamental_cache:
@@ -206,7 +240,7 @@ class FactorCalculator:
 
                 # 利润表数据（ROE, EPS等）
                 for q in range(1, 5):
-                    rs = bs.query_profit_data(code=bs_code, year=year, quarter=q)
+                    rs = self._bs_query_with_reconnect(bs.query_profit_data, code=bs_code, year=year, quarter=q)
                     if rs.error_code == "0":
                         while rs.next():
                             row = rs.get_row_data()
@@ -222,7 +256,7 @@ class FactorCalculator:
                 if not latest_data.get("roe"):
                     # 尝试上一年
                     for q in range(1, 5):
-                        rs = bs.query_profit_data(code=bs_code, year=year - 1, quarter=q)
+                        rs = self._bs_query_with_reconnect(bs.query_profit_data, code=bs_code, year=year - 1, quarter=q)
                         if rs.error_code == "0":
                             while rs.next():
                                 row = rs.get_row_data()
@@ -234,7 +268,7 @@ class FactorCalculator:
 
                 # 成长性数据
                 for q in range(1, 5):
-                    rs = bs.query_growth_data(code=bs_code, year=year, quarter=q)
+                    rs = self._bs_query_with_reconnect(bs.query_growth_data, code=bs_code, year=year, quarter=q)
                     if rs.error_code == "0":
                         while rs.next():
                             row = rs.get_row_data()
@@ -247,7 +281,7 @@ class FactorCalculator:
 
                 # 现金流数据
                 for q in range(1, 5):
-                    rs = bs.query_cash_flow_data(code=bs_code, year=year, quarter=q)
+                    rs = self._bs_query_with_reconnect(bs.query_cash_flow_data, code=bs_code, year=year, quarter=q)
                     if rs.error_code == "0":
                         while rs.next():
                             row = rs.get_row_data()
@@ -265,7 +299,7 @@ class FactorCalculator:
                         latest_data["pe"] = round(last_close / eps, 2)
                     # PB 需要每股净资产，可从 balance 获取
                     for q in range(1, 5):
-                        rs = bs.query_balance_data(code=bs_code, year=year, quarter=q)
+                        rs = self._bs_query_with_reconnect(bs.query_balance_data, code=bs_code, year=year, quarter=q)
                         if rs.error_code == "0":
                             while rs.next():
                                 row = rs.get_row_data()
