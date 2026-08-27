@@ -358,11 +358,23 @@ class RatingEngine:
         "fundamental": ["fundamental"],
     }
 
-    def __init__(self, config: Optional[RatingConfig] = None):
+    def __init__(self, config: Optional[RatingConfig] = None,
+                 data_engine=None):
         self.config = config or RatingConfig()
+        self._data_engine = data_engine
         self._financial_cache: dict[str, dict] = {}
         # 重置 baostock 登录状态
         RatingEngine._bs_logged_in = False
+
+    def _get_ohlcv(self, symbol: str):
+        """获取 OHLCV：优先用注入的 DataEngine；未注入时惰性缓存一个（避免每股新建）。"""
+        if self._data_engine is not None:
+            return self._data_engine.get_ohlcv(symbol)
+        if getattr(RatingEngine, '_lazy_data_engine', None) is None:
+            from sequoia_x.data.engine import DataEngine
+            from sequoia_x.core.config import get_settings
+            RatingEngine._lazy_data_engine = DataEngine(get_settings())
+        return RatingEngine._lazy_data_engine.get_ohlcv(symbol)
 
     def analyze(self, df: pd.DataFrame, symbol: str = "", name: str = "",
                 financial: dict | None = None) -> AnalysisResult:
@@ -773,10 +785,7 @@ class RatingEngine:
             # PE = 价格 / EPS（使用已缓存的OHLCV数据，不需额外查询）
             if fin.get("eps") and fin["eps"] > 0:
                 try:
-                    from sequoia_x.data.engine import DataEngine
-                    from sequoia_x.core.config import get_settings
-                    eng = DataEngine(get_settings())
-                    df = eng.get_ohlcv(symbol)
+                    df = self._get_ohlcv(symbol)
                     if df is not None and not df.empty:
                         last_close = float(df["close"].iloc[-1])
                         fin["pe"] = round(last_close / fin["eps"], 2)

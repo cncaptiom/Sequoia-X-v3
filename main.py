@@ -660,7 +660,7 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                 f"atr={rating_config.weight_atr_channel:.2f} macdRsi={rating_config.weight_macd_rsi:.2f} "
                 f"maCross={rating_config.weight_ma_cross:.2f} kdj={rating_config.weight_kdj:.2f} "
                 f"fund={rating_config.weight_fundamental:.2f}")
-    rating_engine = RatingEngine(config=rating_config)
+    rating_engine = RatingEngine(config=rating_config, data_engine=engine)
 
     # IC 追踪（信号质量监控）
     from sequoia_x.signal.quality import ICTracker
