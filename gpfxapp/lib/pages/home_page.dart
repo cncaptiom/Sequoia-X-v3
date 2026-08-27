@@ -6,12 +6,13 @@ import '../providers/watchlist_provider.dart';
 import '../providers/stock_provider.dart';
 import '../providers/position_provider.dart';
 import '../providers/pc_data_provider.dart';
-import '../models/stock_quote.dart';
-import '../models/analysis_result.dart';
 import '../models/stock_info.dart';
-import '../models/pc_recommendation.dart';
+import '../services/pc_merge.dart';
 import '../widgets/market_overview.dart';
 import '../widgets/stock_card.dart';
+
+/// 持续上榜天数阈值：卡片徽章与汇总"持续N"共用，保证统计一致。
+const int _sustainedMinDays = 2;
 
 class HomePage extends StatefulWidget {
   final VoidCallback? onNavigateToDetail;
@@ -199,8 +200,8 @@ class _HomePageState extends State<HomePage>
             ),
 
             // 自选股列表
-            Consumer<WatchlistProvider>(
-              builder: (context, provider, _) {
+            Consumer2<WatchlistProvider, PcDataProvider>(
+              builder: (context, provider, pcProvider, _) {
                 if (provider.watchlist.isEmpty) {
                   return _buildEmptyWatchlist(context);
                 }
@@ -216,7 +217,12 @@ class _HomePageState extends State<HomePage>
                 return Column(
                   children: provider.watchlist.map((stock) {
                     final quote = provider.quotes[stock.code];
-                    final analysis = provider.analysisResults[stock.code];
+                    final local = provider.analysisResults[stock.code];
+                    final pcRating = pcProvider.getRating(stock.code);
+                    // PC 是权威评级源：有 PC 数据时覆盖本地，与详情页评级一致
+                    final analysis = (local != null && pcRating != null)
+                        ? mergePcData(local, pcRating)
+                        : local;
                     final position = context
                         .watch<PositionProvider>()
                         .getPosition(stock.code);
@@ -254,7 +260,7 @@ class _HomePageState extends State<HomePage>
         a++;
       else if (sc >= 0.5) b++;
       final cd = (p.consecutiveDays as num?)?.toInt() ?? 1;
-      if (cd >= 3) sustained++;
+      if (cd >= _sustainedMinDays) sustained++;
     }
     return Row(children: [
       if (s > 0) _summaryChip('S $s', AppTheme.signalBuy),
@@ -357,11 +363,6 @@ class _HomePageState extends State<HomePage>
   Widget _buildPcStockCard(
       BuildContext context, dynamic pick, dynamic pcProvider) {
     final score = (pick.totalScore as num?)?.toDouble() ?? 0;
-    final labelColor = score >= AppTheme.scoreS
-        ? AppTheme.signalBuy
-        : score >= AppTheme.scoreA
-            ? AppTheme.gradeA
-            : AppTheme.textSecondary;
 
     // 置信度等级（阈值基于全市场评分分布校准）
     // S: 前0.2% (>=1.5分), A: 前7% (>=1.0分), B: 前28% (>=0.5分), C: 其余
@@ -519,8 +520,9 @@ class _HomePageState extends State<HomePage>
                               fontSize: 9, color: AppTheme.textHint)),
                     ),
                   ],
-                  // 持续上榜天数（≥2天显示，信号稳定性参考）
-                  if (((pick.consecutiveDays as num?)?.toInt() ?? 0) >= 2) ...[
+                  // 持续上榜天数（≥2天显示，信号稳定性参考；与汇总"持续N"阈值一致）
+                  if (((pick.consecutiveDays as num?)?.toInt() ?? 0) >=
+                      _sustainedMinDays) ...[
                     const SizedBox(width: 4),
                     Container(
                       padding: const EdgeInsets.symmetric(

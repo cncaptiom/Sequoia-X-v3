@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../models/analysis_result.dart';
 import '../models/rating_snapshot.dart';
-import '../models/stock_quote.dart';
 import '../providers/performance_provider.dart';
 import '../providers/watchlist_provider.dart';
 import '../services/storage_service.dart';

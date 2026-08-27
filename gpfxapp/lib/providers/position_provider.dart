@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../models/position.dart';
-import '../models/stock_info.dart';
 import '../services/storage_service.dart';
 
 class PositionProvider extends ChangeNotifier {

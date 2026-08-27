@@ -1,13 +1,11 @@
 import '../models/stock_quote.dart';
 import '../models/strategy_config.dart';
 import 'notification_service.dart';
-import 'storage_service.dart';
 
 /// PC端推荐价格区间触发告警服务
 /// 在交易时段检查实时价格是否到达PC端推荐的买入/止损/止盈位
 class PcAlertService {
   final NotificationService _notifier = NotificationService();
-  final StorageService _storage = StorageService();
 
   /// 防重复通知标记: { code_alertType: last_notified_time }
   final Map<String, DateTime> _cooldowns = {};

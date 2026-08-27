@@ -7,7 +7,6 @@ import '../providers/watchlist_provider.dart';
 import '../providers/pc_data_provider.dart';
 import '../services/notification_service.dart';
 import '../services/storage_service.dart';
-import '../models/pc_recommendation.dart';
 import 'performance_page.dart';
 
 class SettingsPage extends StatelessWidget {

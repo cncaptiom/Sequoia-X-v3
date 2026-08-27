@@ -8,6 +8,7 @@ import '../providers/position_provider.dart';
 import '../models/position.dart';
 import '../models/analysis_result.dart';
 import '../services/order_suggestion_service.dart';
+import '../services/pc_merge.dart';
 import '../widgets/kline_chart.dart';
 import '../widgets/analysis_section.dart';
 import '../models/stock_info.dart';
@@ -207,7 +208,7 @@ class StockDetailPage extends StatelessWidget {
                       final code4 = provider.currentQuote?.code ?? '';
                       final pcRating4 = pcProvider.getRating(code4);
                       final overridden4 = pcRating4 != null
-                          ? _mergeWithPcData(analysis, pcRating4)
+                          ? mergePcData(analysis, pcRating4)
                           : analysis;
                       return _buildCategoryStrip(overridden4,
                           marketRegime: pcProvider.marketRegimeLabel);
@@ -230,7 +231,7 @@ class StockDetailPage extends StatelessWidget {
                     final code2 = provider.currentQuote?.code ?? '';
                     final pcRating2 = pcProvider2.getRating(code2);
                     final overridden = pcRating2 != null
-                        ? _mergeWithPcData(analysis, pcRating2)
+                        ? mergePcData(analysis, pcRating2)
                         : analysis;
                     return Column(
                       children: [
@@ -253,7 +254,7 @@ class StockDetailPage extends StatelessWidget {
                     final code3 = provider.currentQuote?.code ?? '';
                     final pcRating3 = pcProvider3.getRating(code3);
                     final overridden = pcRating3 != null
-                        ? _mergeWithPcData(analysis, pcRating3)
+                        ? mergePcData(analysis, pcRating3)
                         : analysis;
                     return _buildOrderSuggestions(context, quote, overridden);
                   },
@@ -267,63 +268,7 @@ class StockDetailPage extends StatelessWidget {
     );
   }
 
-  /// PC rating 字符串 → 本地 Rating 枚举（PC 是权威评级源，本地仅离线兜底）
-  Rating? _parsePcRating(String? rating) {
-    switch (rating) {
-      case 'strong_buy':
-        return Rating.strongBuy;
-      case 'buy':
-        return Rating.buy;
-      case 'watch':
-        return Rating.watch;
-      case 'attention':
-        return Rating.attention;
-      case 'avoid':
-        return Rating.avoid;
-      default:
-        return null;
-    }
-  }
-
-  /// 用PC数据覆盖本地分析结果（评分 + 评级 + 止损止盈 + 买入区间）
-  AnalysisResult _mergeWithPcData(AnalysisResult original, dynamic pcRating) {
-    // 1. 合并策略评分（PC端动态权重评分优先，缺失的用本地补）
-    final mergedScores = Map<String, double>.from(
-        (pcRating.strategyScores as Map<String, dynamic>?)?.map(
-              (k, v) => MapEntry(k, (v as num).toDouble()),
-            ) ??
-            {});
-    original.strategyScores.forEach((k, v) {
-      mergedScores.putIfAbsent(k, () => v);
-    });
-
-    // 2. 覆盖止损止盈
-    final pcStop = (pcRating.stopLossPrice as num?)?.toDouble();
-    final pcTp = (pcRating.takeProfitPrice as num?)?.toDouble();
-    final pcRange = (pcRating.buyRange as String?);
-    final pcScore = (pcRating.totalScore as num?)?.toDouble();
-    final pcTrendDesc = (pcRating.trendDescription as String?);
-
-    final pcRR = (pcRating.riskRewardRatio as num?)?.toDouble();
-
-    // 用 PC 评级覆盖本地（决策卡与条件单建议应显示同一评级）
-    final pcRatingEnum = _parsePcRating(pcRating.rating as String?);
-
-    return AnalysisResult(
-      rating: pcRatingEnum ?? original.rating,
-      totalScore: pcScore ?? original.totalScore,
-      strategyScores: mergedScores,
-      trendPassed: original.trendPassed,
-      trendDescription: pcTrendDesc ?? original.trendDescription,
-      riskRewardRatio: pcRR ?? original.riskRewardRatio,
-      stopLossPrice: pcStop ?? original.stopLossPrice,
-      takeProfitPrice: pcTp ?? original.takeProfitPrice,
-      buyRange: pcRange ?? original.buyRange,
-      signals: original.signals,
-      time: original.time,
-    );
-  }
-
+  /// PC 是权威评级源，本地仅离线兜底；合并逻辑统一在 services/pc_merge.dart
   Widget _buildPriceCard(dynamic quote) {
     final changeColor = AppTheme.priceColor(quote.changePercent);
     return Container(

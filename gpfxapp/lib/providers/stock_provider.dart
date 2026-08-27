@@ -176,7 +176,6 @@ class StockProvider extends ChangeNotifier {
     _topPicks = [];
     notifyListeners();
 
-    final results = <StockAnalysis>[];
     final engine = AnalysisEngine(config: _strategyConfig);
 
     // 分批并行，每批5支，避免瞬间太多请求

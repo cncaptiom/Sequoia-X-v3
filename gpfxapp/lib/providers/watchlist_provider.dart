@@ -25,7 +25,6 @@ class WatchlistProvider extends ChangeNotifier {
 
   /// PC端精选推荐缓存（首页展示，自动同步）
   List<StockInfo> _pcRecommendedStocks = [];
-  final Map<String, AnalysisResult> _pcAnalysisOverrides = {};
 
   // 已买入（持仓） — 定时刷新+通知
   Set<String> _heldStocks = {};
@@ -44,7 +43,6 @@ class WatchlistProvider extends ChangeNotifier {
   DateTime? _lastSnapshotSave;
 
   /// 通知类型常量
-  static const String _alertBuyZone = 'buy_zone';
   static const String _alertTakeProfit = 'take_profit';
   static const String _alertStopLoss = 'stop_loss';
 

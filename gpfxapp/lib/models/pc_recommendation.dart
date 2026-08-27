@@ -9,6 +9,8 @@ class PcRatingResult {
   final bool trendPassed;
   final String trendDescription;
   final Map<String, double> strategyScores;
+  /// 各策略标准化分（截面 Z-score，非类内平均），展示策略间真实差异；空则回退 strategyScores
+  final Map<String, double> perStrategyScores;
   final Map<String, double> categoryScores;
   final List<String> signals;
   final double riskRewardRatio;
@@ -27,6 +29,7 @@ class PcRatingResult {
     required this.trendPassed,
     required this.trendDescription,
     required this.strategyScores,
+    required this.perStrategyScores,
     required this.categoryScores,
     required this.signals,
     required this.riskRewardRatio,
@@ -47,6 +50,7 @@ class PcRatingResult {
       trendPassed: json['trend_passed'] as bool? ?? false,
       trendDescription: json['trend_description'] as String? ?? '',
       strategyScores: _parseStringDoubleMap(json['strategy_scores']),
+      perStrategyScores: _parseStringDoubleMap(json['per_strategy_scores']),
       categoryScores: _parseStringDoubleMap(json['category_scores']),
       signals:
           (json['signals'] as List?)?.map((e) => e.toString()).toList() ?? [],

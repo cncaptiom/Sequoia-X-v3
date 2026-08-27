@@ -128,11 +128,11 @@ class PcDataProvider extends ChangeNotifier {
     try {
       final cachedSummary = await _storage.getPcCachedSummary();
       if (cachedSummary != null && cachedSummary is Map) {
-        _summary = PcPortfolioSummary.fromJson(Map<String, dynamic>.from(cachedSummary as Map));
+        _summary = PcPortfolioSummary.fromJson(Map<String, dynamic>.from(cachedSummary));
       }
       final cachedRatings = await _storage.getPcCachedRatings();
       if (cachedRatings != null && cachedRatings is Map) {
-        _fullRatings = PcFullRatings.fromJson(Map<String, dynamic>.from(cachedRatings as Map));
+        _fullRatings = PcFullRatings.fromJson(Map<String, dynamic>.from(cachedRatings));
         _ratingsMap = {};
         for (final r in _fullRatings!.ratings) {
           _ratingsMap[r.symbol] = r;
@@ -190,6 +190,7 @@ class PcDataProvider extends ChangeNotifier {
             'trend_passed': rr.trendPassed,
             'trend_description': rr.trendDescription,
             'strategy_scores': rr.strategyScores,
+            'per_strategy_scores': rr.perStrategyScores,
             'category_scores': rr.categoryScores,
             'signals': rr.signals,
             'risk_reward_ratio': rr.riskRewardRatio,
