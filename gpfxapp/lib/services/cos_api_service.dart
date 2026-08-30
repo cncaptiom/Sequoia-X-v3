@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import '../models/pc_recommendation.dart';
+import '../models/trade_signal.dart';
 
 /// 安全解码 JSON，处理非 Map 类型和空响应
 Map<String, dynamic>? _safeDecodeMap(String raw) {
@@ -199,6 +200,13 @@ class CosApiService {
   /// 获取策略收益率回测数据
   Future<Map<String, dynamic>?> fetchStrategyBacktest() async {
     return await _getJson('backtest/strategy_performance.json');
+  }
+
+  /// 获取PC端完整操作信号（signals/today.json，含置信度/仓位/理由）
+  Future<PcSignalList?> fetchSignals() async {
+    final json = await _getJson('signals/today.json');
+    if (json == null) return null;
+    return PcSignalList.fromJson(json);
   }
 
   /// 带 COS 签名认证的 PUT 请求

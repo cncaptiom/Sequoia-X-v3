@@ -12,6 +12,7 @@ import '../services/pc_merge.dart';
 import '../widgets/kline_chart.dart';
 import '../widgets/analysis_section.dart';
 import '../models/stock_info.dart';
+import '../models/trade_signal.dart';
 import '../providers/pc_data_provider.dart';
 
 class StockDetailPage extends StatelessWidget {
@@ -196,6 +197,7 @@ class StockDetailPage extends StatelessWidget {
                       currentPrice: quote.currentPrice,
                       isHeld: watchProvider.isHeld(code),
                       marketRegime: pcProvider.marketRegimeLabel,
+                      signal: pcProvider.getSignal(code),
                     );
                   },
                 ),
@@ -358,6 +360,7 @@ class StockDetailPage extends StatelessWidget {
     required double currentPrice,
     required bool isHeld,
     String marketRegime = '',
+    PcTradeSignal? signal,
   }) {
     // — 提取数据（PC端优先） —
     final bool hasPc = pcRating != null;
@@ -381,6 +384,13 @@ class StockDetailPage extends StatelessWidget {
         ? (pcRating.takeProfitPrice as num?)?.toDouble()
         : analysis?.takeProfitPrice;
     final String buyRange = hasPc ? (pcRating.buyRange as String? ?? '') : '';
+
+    // 完整操作信号（signals/today.json：置信度/仓位/理由）
+    final double sigConfidence = signal?.confidence ?? 0;
+    final double sigPositionPct = signal?.positionPct ?? 0;
+    final String sigLevelLabel = signal?.levelLabel ?? '';
+    final String sigRationale = signal?.rationale ?? '';
+    final String sigEntryCondition = signal?.entryCondition ?? '';
 
     // 解析买入区间
     double entryLow = 0, entryHigh = 0;
@@ -587,10 +597,24 @@ class StockDetailPage extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                           color: actionColor)),
                 ),
+                if (sigLevelLabel.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(sigLevelLabel,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: ratingColor)),
+                ],
                 const SizedBox(width: 12),
                 Text('${score.toStringAsFixed(1)}分',
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w500)),
+                if (sigConfidence > 0) ...[
+                  const SizedBox(width: 8),
+                  Text('置信 ${(sigConfidence * 100).round()}%',
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF6A1B9A))),
+                ],
                 if (rr > 0) ...[
                   const SizedBox(width: 8),
                   Text('盈亏比 ${rr.toStringAsFixed(1)}:1',
@@ -623,6 +647,8 @@ class StockDetailPage extends StatelessWidget {
                 _infoTag('止损', stopLoss.toStringAsFixed(2), AppTheme.downColor),
               if (takeProfit != null)
                 _infoTag('止盈', takeProfit.toStringAsFixed(2), AppTheme.upColor),
+              if (sigPositionPct > 0)
+                _infoTag('仓位', '${(sigPositionPct * 100).round()}%', const Color(0xFF6A1B9A)),
             ],
           ),
           const SizedBox(height: 12),
@@ -638,6 +664,36 @@ class StockDetailPage extends StatelessWidget {
                   child: _adviceChip3('信号', sigText, AppTheme.signalWatch)),
             ],
           ),
+          // ── 依据说明（signals：触发条件 + 买入理由） ──
+          if (sigEntryCondition.isNotEmpty || sigRationale.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppTheme.primaryDark.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(8),
+                border:
+                    Border.all(color: AppTheme.primaryDark.withOpacity(0.15)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (sigEntryCondition.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text('触发：$sigEntryCondition',
+                          style: const TextStyle(
+                              fontSize: 11, color: AppTheme.textSecondary)),
+                    ),
+                  if (sigRationale.isNotEmpty)
+                    Text('依据：$sigRationale',
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textSecondary)),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

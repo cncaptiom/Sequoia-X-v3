@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/pc_recommendation.dart';
 import '../models/strategy_config.dart';
+import '../models/trade_signal.dart';
 import '../providers/watchlist_provider.dart';
 import '../services/cos_api_service.dart';
 import '../services/storage_service.dart';
@@ -19,6 +20,8 @@ class PcDataProvider extends ChangeNotifier {
   PcFullRatings? _fullRatings;
   Map<String, PcRatingResult> _ratingsMap = {};
   Map<String, dynamic>? _strategyBacktest;
+  PcSignalList? _signals;
+  Map<String, PcTradeSignal> _signalsMap = {};
 
   String _cosSecretId = '';
   String _cosSecretKey = '';
@@ -68,23 +71,47 @@ class PcDataProvider extends ChangeNotifier {
   /// PC端评级数据是否已加载
   bool get hasRatings => _ratingsMap.isNotEmpty;
 
+  /// 完整操作信号列表（含置信度/仓位/理由）
+  PcSignalList? get signals => _signals;
+
+  /// 获取指定股票的完整操作信号
+  PcTradeSignal? getSignal(String symbol) => _signalsMap[symbol];
+
   /// 策略收益率回测数据
   Map<String, dynamic>? get strategyBacktest => _strategyBacktest;
 
-  /// 将全量评级数据转为 {symbol: {entry_low, stop_loss, ...}} 格式供告警服务使用
+  /// 将全量评级/信号数据转为 {symbol: {entry_low, stop_loss, ...}} 格式供告警服务使用
+  /// 优先用 signals（SignalGenerator 计算的买卖点更精确），否则回退 ratings
   Map<String, Map<String, dynamic>> buildRecommendationsMap() {
     final map = <String, Map<String, dynamic>>{};
     for (final r in _ratingsMap.values) {
       Map<String, dynamic> rec = {};
-      if (r.buyRange.isNotEmpty) {
-        final parts = r.buyRange.split(' - ');
-        if (parts.length == 2) {
-          rec['entry_low'] = double.tryParse(parts[0]) ?? 0;
-          rec['entry_high'] = double.tryParse(parts[1]) ?? 0;
+      final sig = _signalsMap[r.symbol];
+      if (sig != null) {
+        rec['entry_low'] = sig.entryLow;
+        rec['entry_high'] = sig.entryHigh;
+        rec['entry_condition'] = sig.entryCondition;
+        if (sig.stopLoss > 0) rec['stop_loss'] = sig.stopLoss;
+        if (sig.target1 > 0) rec['target_1'] = sig.target1;
+        if (sig.target2 != null && sig.target2! > 0) rec['target_2'] = sig.target2;
+        rec['position_pct'] = sig.positionPct;
+        rec['confidence'] = sig.confidence;
+        rec['max_hold_days'] = sig.maxHoldDays;
+        rec['rationale'] = sig.rationale;
+        rec['risk_reward_ratio'] = sig.riskRewardRatio;
+        rec['level_label'] = sig.levelLabel;
+      } else {
+        if (r.buyRange.isNotEmpty) {
+          final parts = r.buyRange.split(' - ');
+          if (parts.length == 2) {
+            rec['entry_low'] = double.tryParse(parts[0]) ?? 0;
+            rec['entry_high'] = double.tryParse(parts[1]) ?? 0;
+          }
         }
+        if (r.stopLossPrice != null) rec['stop_loss'] = r.stopLossPrice;
+        if (r.takeProfitPrice != null) rec['target_1'] = r.takeProfitPrice;
+        rec['risk_reward_ratio'] = r.riskRewardRatio;
       }
-      if (r.stopLossPrice != null) rec['stop_loss'] = r.stopLossPrice;
-      if (r.takeProfitPrice != null) rec['target_1'] = r.takeProfitPrice;
       map[r.symbol] = rec;
     }
     return map;
@@ -136,6 +163,14 @@ class PcDataProvider extends ChangeNotifier {
         _ratingsMap = {};
         for (final r in _fullRatings!.ratings) {
           _ratingsMap[r.symbol] = r;
+        }
+      }
+      final cachedSignals = await _storage.getPcCachedSignals();
+      if (cachedSignals != null && cachedSignals is Map) {
+        _signals = PcSignalList.fromJson(Map<String, dynamic>.from(cachedSignals));
+        _signalsMap = {};
+        for (final s in _signals!.signals) {
+          _signalsMap[s.symbol] = s;
         }
       }
       // 恢复缓存时间戳
@@ -201,6 +236,28 @@ class PcDataProvider extends ChangeNotifier {
           }).toList(),
         });
       }
+      // PcSignalList也没有toJson，手动拼装
+      if (_signals != null) {
+        final s = _signals!;
+        await _storage.savePcCachedSignals({
+          'market_regime': s.marketRegime,
+          'suggested_exposure': s.suggestedExposure,
+          'total_signals': s.totalSignals,
+          'rating_summary': s.ratingSummary,
+          'signals': s.signals.map((sig) => {
+            'symbol': sig.symbol, 'name': sig.name,
+            'strategies': sig.strategies, 'strategy_count': sig.strategyCount,
+            'confidence': sig.confidence, 'level': sig.level, 'level_label': sig.levelLabel,
+            'current_price': sig.currentPrice, 'last_date': sig.lastDate,
+            'entry_low': sig.entryLow, 'entry_high': sig.entryHigh, 'entry_mid': sig.entryMid,
+            'entry_condition': sig.entryCondition, 'stop_loss': sig.stopLoss,
+            'target_1': sig.target1, 'target_2': sig.target2, 'max_hold_days': sig.maxHoldDays,
+            'risk_pct': sig.riskPct, 'reward_pct': sig.rewardPct,
+            'risk_reward_ratio': sig.riskRewardRatio, 'position_pct': sig.positionPct,
+            'atr': sig.atr, 'score_details': sig.scoreDetails, 'rationale': sig.rationale,
+          }).toList(),
+        });
+      }
       // 缓存时间戳
       if (_lastFetch != null) {
         await _storage.savePcCacheTimestamp(_lastFetch!.toIso8601String());
@@ -250,6 +307,18 @@ class PcDataProvider extends ChangeNotifier {
       try {
         final bt = await _cos.fetchStrategyBacktest();
         if (bt != null) _strategyBacktest = bt;
+      } catch (_) {}
+
+      // 完整操作信号（signals/today.json）— 独立，失败不影响其他
+      try {
+        final newSignals = await _cos.fetchSignals();
+        if (newSignals != null) {
+          _signals = newSignals;
+          _signalsMap = {};
+          for (final s in _signals!.signals) {
+            _signalsMap[s.symbol] = s;
+          }
+        }
       } catch (_) {}
 
       // 仅当本次确实拉到新数据时清除 error 并更新时间戳（避免失败时误导"数据更新于"）

@@ -251,6 +251,16 @@ class StorageService {
     await Hive.box(_settingsBox).put('pcCachedRatings', ratings);
   }
 
+  Future<dynamic> getPcCachedSignals() async {
+    final data = Hive.box(_settingsBox).get('pcCachedSignals');
+    if (data == null) return null;
+    return data;
+  }
+
+  Future<void> savePcCachedSignals(dynamic signals) async {
+    await Hive.box(_settingsBox).put('pcCachedSignals', signals);
+  }
+
   Future<String?> getPcCacheTimestamp() async {
     return Hive.box(_settingsBox).get('pcCacheTimestamp') as String?;
   }
