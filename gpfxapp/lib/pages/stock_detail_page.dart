@@ -597,24 +597,10 @@ class StockDetailPage extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                           color: actionColor)),
                 ),
-                if (sigLevelLabel.isNotEmpty) ...[
-                  const SizedBox(width: 8),
-                  Text(sigLevelLabel,
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: ratingColor)),
-                ],
                 const SizedBox(width: 12),
                 Text('${score.toStringAsFixed(1)}分',
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w500)),
-                if (sigConfidence > 0) ...[
-                  const SizedBox(width: 8),
-                  Text('置信 ${(sigConfidence * 100).round()}%',
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF6A1B9A))),
-                ],
                 if (rr > 0) ...[
                   const SizedBox(width: 8),
                   Text('盈亏比 ${rr.toStringAsFixed(1)}:1',
@@ -630,6 +616,19 @@ class StockDetailPage extends StatelessWidget {
                           color: deviation.abs() > 5
                               ? AppTheme.downColor
                               : AppTheme.textHint)),
+                ],
+                // 推荐等级 + 置信度合并到行尾，避免挤占盈亏比/偏离的显示
+                if (sigLevelLabel.isNotEmpty || sigConfidence > 0) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                      [
+                        sigLevelLabel,
+                        if (sigConfidence > 0) '${(sigConfidence * 100).round()}%',
+                      ].where((e) => e.isNotEmpty).join(' · '),
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: ratingColor)),
                 ],
               ],
             ), // Row
