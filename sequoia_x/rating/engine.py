@@ -73,18 +73,19 @@ class RatingConfig:
 
     trend_filter_enabled: bool = True
 
-    # 默认权重：按策略类别等权各 0.25，类内均分给启用策略
-    #   trend=0.25(turtleTrade/atrChannel) momentum=0.25(maCross)
-    #   reversal=0.25(meanReversion/kdj)    fundamental=0.25
+    # 默认权重（2026-08 全量因子验证校准）：
+    #   横截面IC实证：meanReversion(+0.10) > kdj(+0.03) > turtleTrade(+0.006) > fundamental(-0.06)
+    #   > atrChannel(bear市正/全量负) > maCross(-0.24最差,大幅降权)
+    #   超跌反转信号20日超额+0.59%胜率56.9%，熊市胜率85.4%，故 reversal 主导
     weight_ma_volume: float = 0.0
     weight_turtle_trade: float = 0.125
-    weight_mean_reversion: float = 0.125
+    weight_mean_reversion: float = 0.20
     weight_volume_price: float = 0.0
-    weight_atr_channel: float = 0.125
+    weight_atr_channel: float = 0.05
     weight_macd_rsi: float = 0.0
-    weight_ma_cross: float = 0.25
+    weight_ma_cross: float = 0.05
     weight_kdj: float = 0.125
-    weight_fundamental: float = 0.25
+    weight_fundamental: float = 0.20
 
     # ── 策略类别与市场状态权重映射 ──
     # 各策略所属类别
@@ -118,20 +119,18 @@ class RatingConfig:
         "kdj": "kdj",
         "fundamental": "fundamental",
     }
-    # 各市场状态下策略类别的偏向权重（基于回测数据优化）
-    # 强牛: trend+reversal接近，momentum较弱
-    # 弱牛: reversal大幅领先，trend接近零
-    # 震荡: 三类接近，reversal略优
-    # 弱熊/强熊: 全部亏损，reversal损失最小
+    # 各市场状态下策略类别的偏向权重（2026-08 全量因子验证校准）
+    # 实证依据（2024-01~2026-08，5206只/584交易日）：
+    #   · 超跌反转信号(sig_meanrev) 20日超额+0.59% 胜率56.9%；熊市胜率85.4%、超额+1.17% → 熊市 reversal 主导
+    #   · 趋势突破(sig_turtle) 熊市超额-3.24%（假突破多）→ 熊市 trend 权重极低
+    #   · 动量类(maCross) 横截面IC全程为负（-0.24最差）→ momentum 权重最低
+    #   · fundamental 独立维度，防御性，熊市保持稳定权重
     REGIME_BIAS = {
-        # 所有市场状态统一等权分配，不根据状态调整
-        # 原因：缺乏足够数据支撑不同状态下策略收益有显著差异
-        # 注：含 fundamental，四类各 0.25（由 apply_regime 均分给类内启用策略）
-        "强牛": {"trend": 0.25, "momentum": 0.25, "reversal": 0.25, "fundamental": 0.25},
-        "弱牛": {"trend": 0.25, "momentum": 0.25, "reversal": 0.25, "fundamental": 0.25},
-        "震荡": {"trend": 0.25, "momentum": 0.25, "reversal": 0.25, "fundamental": 0.25},
-        "弱熊": {"trend": 0.25, "momentum": 0.25, "reversal": 0.25, "fundamental": 0.25},
-        "强熊": {"trend": 0.25, "momentum": 0.25, "reversal": 0.25, "fundamental": 0.25},
+        "强牛": {"trend": 0.22, "momentum": 0.12, "reversal": 0.34, "fundamental": 0.32},
+        "弱牛": {"trend": 0.16, "momentum": 0.12, "reversal": 0.40, "fundamental": 0.32},
+        "震荡": {"trend": 0.14, "momentum": 0.08, "reversal": 0.46, "fundamental": 0.32},
+        "弱熊": {"trend": 0.06, "momentum": 0.04, "reversal": 0.58, "fundamental": 0.32},
+        "强熊": {"trend": 0.00, "momentum": 0.00, "reversal": 0.68, "fundamental": 0.32},
     }
 
     def apply_regime(self, regime_label: str) -> None:
@@ -183,9 +182,10 @@ class RatingConfig:
             else:
                 object.__setattr__(self, self.WEIGHT_ATTRS[attr_key], 0.0)
 
-        # 如果只有不到3个策略有正 IR，数据不足，回退到等权
+        # 如果只有不到3个策略有正 IR，说明 IR 数据不足：
+        # 保留 apply_regime 已设置的权重（市场状态导向），不再回退等权，
+        # 避免把负 IC 策略（如 maCross）按 0.25 等权恢复
         if len(ir_values) < 3:
-            self.apply_equal_weights()
             return
 
         total_ir = sum(ir_values.values())
