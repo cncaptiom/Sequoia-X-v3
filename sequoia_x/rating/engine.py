@@ -363,6 +363,8 @@ class RatingEngine:
         self.config = config or RatingConfig()
         self._data_engine = data_engine
         self._financial_cache: dict[str, dict] = {}
+        # efinance 全市场财务数据缓存（None=未加载，{} = efinance 不可用）
+        self._efinance_all: dict | None = None
         # 重置 baostock 登录状态
         RatingEngine._bs_logged_in = False
 
@@ -712,10 +714,32 @@ class RatingEngine:
         return rs
 
     def _fetch_financial(self, symbol: str) -> dict | None:
-        """获取股票财务数据（带缓存 + 单次 baostock 登录，每只股票最多3次查询）。"""
+        """获取股票财务数据（带缓存）。优先 efinance 全市场批量，失败回退 baostock。"""
         if symbol in self._financial_cache:
             return self._financial_cache[symbol]
 
+        # 优先 efinance 全市场批量（一次拉全市场业绩，更快且含净利率/毛利率）
+        if self._efinance_all is None:
+            try:
+                from sequoia_x.data.efinance_financial import load_financial_all
+                self._efinance_all = load_financial_all()
+            except Exception:
+                self._efinance_all = {}
+        efin = self._efinance_all.get(symbol)
+        if efin:
+            efin = dict(efin)
+            eps = efin.get("eps")
+            if eps and eps > 0:
+                try:
+                    df = self._get_ohlcv(symbol)
+                    if df is not None and not df.empty:
+                        efin["pe"] = round(float(df["close"].iloc[-1]) / eps, 2)
+                except Exception:
+                    pass
+            self._financial_cache[symbol] = efin
+            return efin
+
+        # 回退：baostock 逐股查询（efinance 不可用或未覆盖该股）
         # 延迟登录：整个扫描周期只登录一次
         if not getattr(RatingEngine, '_bs_logged_in', False):
             try:
