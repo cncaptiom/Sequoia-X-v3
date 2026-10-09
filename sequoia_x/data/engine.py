@@ -76,6 +76,34 @@ def _mootdx_fetch_batch(tasks: list) -> list:
     return results
 
 
+# 新浪批量快照只覆盖一个交易日：库内最近交易日距快照日超过这么多自然日，
+# 说明库本身长期没更新，此时不能只补最新一天，全部交 baostock 补齐。
+# 取 12 是因为 A 股最长连续休市（春节/国庆约 9 天）叠加周末也在阈值内。
+_MAX_SNAPSHOT_GAP_DAYS = 12
+
+
+def _calendar_gap_days(earlier: str, later: str) -> int:
+    """两个 ISO 日期之间相差的自然日数。"""
+    try:
+        return (date.fromisoformat(later) - date.fromisoformat(earlier)).days
+    except ValueError:
+        return 999
+
+
+# 非个股代码段：010/018/019/020 债券，360 债券，395 国证指数，399 深证指数
+_NON_STOCK_PREFIXES = ("010", "018", "019", "020", "360", "395", "399")
+# 为 RegimeDetector 保留在库内、但不参与个股扫描的基准指数
+_BENCHMARK_INDEX_SYMBOLS = frozenset({"000300", "000905"})
+
+
+def _is_a_share(code: str) -> bool:
+    """判断是否为可参与扫描的 A 股个股代码（排除债券与指数）。"""
+    c = str(code).zfill(6)
+    if c in _BENCHMARK_INDEX_SYMBOLS or c.startswith(_NON_STOCK_PREFIXES):
+        return False
+    return c.startswith(("6", "0", "3"))
+
+
 def _mootdx_get_symbols() -> pd.DataFrame:
     """通过 mootdx 获取全市场 A 股代码列表。"""
     client = _mootdx_get_client()
@@ -203,29 +231,55 @@ class DataValidator:
         except (ValueError, TypeError):
             return False, 999
 
+    # 「新鲜」的判定窗口：最近 N 个交易日
+    _FRESH_TRADING_DAYS = 5
+    # 库内最新交易日距今超过这么多自然日就判异常，覆盖"库本身停止更新"的情况。
+    # 放宽到 15 是因为 A 股最长连续休市（春节/国庆）约 9 天。
+    _DB_STALE_CALENDAR_DAYS = 15
+
     @staticmethod
     def compute_staleness_report(db_path: str) -> dict:
-        """生成数据新鲜度报告。"""
-        cutoff = (date.today() - timedelta(days=5)).isoformat()
+        """生成数据新鲜度报告。
+
+        「新鲜」= 有最近 ``_FRESH_TRADING_DAYS`` 个**交易日**中任一天的数据。
+        交易日直接取库内出现过的日期（stock_daily 只存交易日），避免国庆/春节
+        长假后按自然日计算导致大面积误报过期。
+        """
         with closing(sqlite3.connect(db_path)) as conn:
             total = conn.execute(
                 "SELECT COUNT(DISTINCT symbol) FROM stock_daily"
             ).fetchone()[0]
-            fresh = conn.execute(
-                "SELECT COUNT(DISTINCT symbol) FROM stock_daily WHERE date >= ?",
-                (cutoff,),
-            ).fetchone()[0]
+            recent_dates = [
+                row[0] for row in conn.execute(
+                    "SELECT DISTINCT date FROM stock_daily ORDER BY date DESC LIMIT ?",
+                    (DataValidator._FRESH_TRADING_DAYS,),
+                ).fetchall()
+            ]
+            if recent_dates:
+                fresh = conn.execute(
+                    "SELECT COUNT(DISTINCT symbol) FROM stock_daily WHERE date >= ?",
+                    (recent_dates[-1],),
+                ).fetchone()[0]
+            else:
+                fresh = 0
             latest = conn.execute(
                 "SELECT MAX(date) FROM stock_daily"
             ).fetchone()[0]
+
         stale = total - fresh
+        try:
+            db_lag_days = (date.today() - date.fromisoformat(latest)).days if latest else 999
+        except ValueError:
+            db_lag_days = 999
         return {
             "total": total,
             "fresh": fresh,
             "stale": stale,
             "stale_pct": round(stale / total * 100, 1) if total > 0 else 0,
             "latest_date": latest or "无数据",
-            "warning": stale > total * 0.3 if total > 0 else True,
+            "recent_trading_days": sorted(recent_dates),
+            "warning": (stale > total * 0.3 if total > 0 else True)
+            or db_lag_days > DataValidator._DB_STALE_CALENDAR_DAYS,
         }
 
     @staticmethod
@@ -670,17 +724,16 @@ class DataEngine:
     # ── 数据同步 ──
 
     def sync_today_bulk(self) -> int:
-        """多进程并行拉取增量数据（首选 mootdx，备选 baostock）。
+        """拉取全市场增量日K并写入本地库。
 
-        改进：mootdx 改用 ThreadPoolExecutor 并发拉取，速度提升 10-20 倍。
+        首选新浪批量快照（约 20 个请求覆盖全市场），历史缺口降级 baostock 逐股补齐。
         """
         from datetime import date, timedelta
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import threading
 
         today_str = date.today().strftime("%Y-%m-%d")
 
         tasks = []
+        missing = {}  # {symbol: 库内最后一条数据的日期}，用于只补缺口
         with closing(sqlite3.connect(self.db_path)) as conn:
             rows = conn.execute(
                 "SELECT symbol, MAX(date) FROM stock_daily GROUP BY symbol"
@@ -696,6 +749,7 @@ class DataEngine:
             start = today_str
             if last_date:
                 start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+            missing[symbol] = last_date or "1990-01-01"
             tasks.append((symbol, self._to_baostock_code(symbol), start, today_str))
 
         if not tasks:
@@ -704,122 +758,45 @@ class DataEngine:
 
         logger.info(f"需要更新 {len(tasks)} 只股票")
 
-        # ── mootdx 健康检查：先试 3 只，全部空则直接降级 ──
-        all_rows = []
-        _mootdx_alive = False
-        try:
-            from mootdx.quotes import Quotes
-            _probe_client = Quotes.factory(market='std')
-            _probe_symbols = [t[0] for t in tasks[:3]]
-            for sym in _probe_symbols:
-                _df = _probe_client.bars(symbol=sym, frequency=9, start=0, count=5)
-                if _df is not None and not _df.empty:
-                    _mootdx_alive = True
-                    break
-            logger.info(f"mootdx 健康检查: {'存活' if _mootdx_alive else '不可用，直接降级 baostock'}")
-        except Exception as e:
-            logger.warning(f"mootdx 健康检查异常: {e}")
+        # ── 新浪批量快照（日增量主路径） ──
+        # 一次请求 250 个代码，全市场约 20 个请求；只提供最新一个交易日。
+        from sequoia_x.data.sina_quote import fetch_snapshot
 
-        # ── mootdx 并行拉取（仅健康检查通过才执行） ──
-        if _mootdx_alive:
-            try:
-                logger.info("使用 mootdx 并发同步（16线程）...")
-                deadline = time.time() + 180  # 最多 3 分钟
-                _mootdx_local = threading.local()
+        snap_rows, snap_failed = fetch_snapshot(list(missing))
+        snap_date = max((r[1] for r in snap_rows), default=None)
+        if not snap_date:
+            logger.warning("新浪快照未取到任何数据，全部降级 baostock")
 
-                def _get_mootdx_client():
-                    if not hasattr(_mootdx_local, "client"):
-                        from mootdx.quotes import Quotes
-                        _mootdx_local.client = Quotes.factory(market='std')
-                    return _mootdx_local.client
-
-                def _mootdx_fetch_one(task):
-                    if time.time() > deadline:
-                        return None
-                    symbol, bs_code, start, end = task
-                    try:
-                        client = _get_mootdx_client()
-                        df = client.bars(symbol=symbol, frequency=9, start=0, count=5)
-                        if df is not None and not df.empty:
-                            df["date"] = pd.to_datetime(df["datetime"]).dt.date.astype(str)
-                            df = df[df["date"] == today_str]
-                            if not df.empty:
-                                return _mootdx_parse_bars(df, symbol)
-                    except Exception:
-                        pass
-                    return None
-
-                n_workers = min(16, len(tasks))
-                with ThreadPoolExecutor(max_workers=n_workers) as pool:
-                    futures = {pool.submit(_mootdx_fetch_one, t): t for t in tasks}
-                    done = 0
-                    for f in as_completed(futures):
-                        done += 1
-                        if done % 500 == 0:
-                            logger.info(f"mootdx 进度: {done}/{len(tasks)}")
-                        try:
-                            rows = f.result()
-                            if rows:
-                                all_rows.extend(rows)
-                        except Exception:
-                            continue
-
-                if all_rows:
-                    logger.info(f"mootdx 同步完成: {len(all_rows)} 条（{done} 只）")
-            except Exception as e:
-                logger.warning(f"mootdx 同步失败: {e}")
-
-        # mootdx 无数据时降级到 baostock（线程池 + 单连接锁，兼容 Windows）
-        if not all_rows:
-            logger.info("mootdx 无数据，降级到 baostock...")
-            import baostock as bs
-            _bs_deadline = time.time() + 300  # 最多 5 分钟
-            _bs_lock = threading.Lock()
-            _bs_login_ok = False
-            try:
-                lg = bs.login()
-                if lg.error_code == '0':
-                    _bs_login_ok = True
-            except Exception as e:
-                logger.warning(f"baostock 登录失败: {e}")
-
-            if _bs_login_ok:
-                def _bs_fetch_one(task):
-                    if time.time() > _bs_deadline:
-                        return None
-                    symbol, bs_code, start, end = task
-                    with _bs_lock:
-                        try:
-                            rs = bs.query_history_k_data_plus(
-                                bs_code,
-                                "date,open,high,low,close,volume,amount",
-                                start_date=start, end_date=end,
-                                frequency="d", adjustflag="2",
-                            )
-                            rows = []
-                            while rs.next():
-                                rows.append([symbol] + rs.get_row_data())
-                            return rows if rows else None
-                        except Exception:
-                            return None
-
-                n_bs_workers = min(8, len(tasks))
-                with ThreadPoolExecutor(max_workers=n_bs_workers) as pool:
-                    futures = {pool.submit(_bs_fetch_one, t): t for t in tasks}
-                    for f in as_completed(futures):
-                        try:
-                            rows = f.result()
-                            if rows:
-                                all_rows.extend(rows)
-                        except Exception:
-                            continue
-                try:
-                    bs.logout()
-                except Exception:
-                    pass
-                logger.info(f"baostock 同步完成: {len(all_rows)} 条")
+        # 快照只有一天：没取到的、以及历史缺口超过一天的，交 baostock 逐股补齐
+        need_baostock = set(snap_failed)
+        if snap_date:
+            with closing(sqlite3.connect(self.db_path)) as conn:
+                prev_trading_day = conn.execute(
+                    "SELECT MAX(date) FROM stock_daily WHERE date < ?", (snap_date,)
+                ).fetchone()[0]
+            if prev_trading_day and _calendar_gap_days(prev_trading_day, snap_date) > _MAX_SNAPSHOT_GAP_DAYS:
+                logger.warning(
+                    f"库内最近交易日 {prev_trading_day} 距快照 {snap_date} 超过 "
+                    f"{_MAX_SNAPSHOT_GAP_DAYS} 天，全量交 baostock 补齐"
+                )
+                need_baostock |= set(missing)
             else:
-                logger.warning("baostock 不可用，跳过数据同步")
+                need_baostock |= {s for s, last in missing.items() if last < prev_trading_day}
+        else:
+            need_baostock |= set(missing)
+
+        # 快照里混着停牌/退市股的旧快照，只保留日期新于该股已有数据、且不走 baostock 的行
+        all_rows = [
+            r for r in snap_rows
+            if snap_date and r[1] > missing[r[0]] and r[0] not in need_baostock
+        ]
+        if not all_rows and not need_baostock:
+            logger.info(f"快照交易日 {snap_date} 无新于库内的数据，无需更新")
+            return 0
+
+        if need_baostock:
+            logger.info(f"{len(need_baostock)} 只需补齐历史缺口，降级 baostock...")
+            all_rows.extend(self._baostock_fetch_daily(sorted(need_baostock), missing))
 
         if not all_rows:
             logger.info("无新数据（可能非交易日）")
@@ -830,6 +807,8 @@ class DataEngine:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df = df.dropna(subset=["close"])
         df = df[df["volume"] > 0]
+        # 两个数据源理论上可能覆盖同一个 (symbol, date)，重复会让 to_sql 撞 UNIQUE 约束
+        df = df.drop_duplicates(subset=["symbol", "date"], keep="first")
 
         count = len(df)
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -845,12 +824,69 @@ class DataEngine:
         # 生成新鲜度报告
         staleness = DataValidator.compute_staleness_report(self.db_path)
         if staleness["warning"]:
-            logger.warning(f"数据新鲜度预警: {staleness['stale_pct']}% 股票过期 ({staleness['stale']}/{staleness['total']})")
+            logger.warning(
+                f"数据新鲜度预警: {staleness['stale_pct']}% 股票超过 5 个交易日未更新 "
+                f"({staleness['stale']}/{staleness['total']})，库内最新 {staleness['latest_date']}"
+            )
         else:
-            logger.info(f"数据新鲜度: {staleness['fresh']}/{staleness['total']} 只5日内有更新")
+            logger.info(
+                f"数据新鲜度: {staleness['fresh']}/{staleness['total']} 只近 5 个交易日有更新"
+            )
 
         logger.info(f"sync_today_bulk: 写入 {count} 条数据")
         return count
+
+    def _baostock_fetch_daily(self, symbols: list[str], missing: dict[str, str]) -> list[list]:
+        """baostock 逐股补齐日K（新浪快照未覆盖的历史缺口）。
+
+        串行执行：baostock 的 socket 存在模块级全局变量，多线程无法各自开会话，
+        加锁并行只会退化成串行，反而多一层开销。
+
+        Returns:
+            每行 [symbol, date, open, high, low, close, volume(股), turnover(元)]。
+        """
+        import baostock as bs
+
+        try:
+            login_result = bs.login()
+        except Exception as exc:
+            logger.warning(f"baostock 登录失败: {exc}")
+            return []
+        if login_result.error_code != "0":
+            logger.warning(f"baostock 登录失败: {login_result.error_msg}")
+            return []
+
+        today_str = date.today().strftime("%Y-%m-%d")
+        rows: list[list] = []
+        started = time.time()
+        try:
+            for i, symbol in enumerate(symbols):
+                start = (
+                    date.fromisoformat(missing[symbol]) + timedelta(days=1)
+                ).strftime("%Y-%m-%d")
+                try:
+                    rs = bs.query_history_k_data_plus(
+                        self._to_baostock_code(symbol),
+                        "date,open,high,low,close,volume,amount",
+                        start_date=start, end_date=today_str,
+                        frequency="d", adjustflag="2",
+                    )
+                    while rs.next():
+                        row = rs.get_row_data()
+                        if row[0]:
+                            rows.append([symbol] + row)
+                except Exception as exc:
+                    logger.debug(f"[{symbol}] baostock 补齐失败: {exc}")
+                if (i + 1) % 200 == 0:
+                    logger.info(f"baostock 补齐进度: {i + 1}/{len(symbols)}")
+        finally:
+            try:
+                bs.logout()
+            except Exception:
+                pass
+
+        logger.info(f"baostock 补齐完成: {len(rows)} 条，耗时 {time.time() - started:.1f}s")
+        return rows
 
     def backfill(self, symbols: list[str],
                  bs_code_map: dict[str, str] | None = None) -> None:
@@ -1022,10 +1058,6 @@ class DataEngine:
                 "SELECT DISTINCT symbol FROM stock_daily"
             ).fetchall()
         symbols = [row[0] for row in rows]
-        # 过滤非A股（排除债券代码）
-        def _is_a_share(code):
-            c = str(code).zfill(6)
-            return c.startswith(('6', '0', '3')) and not c.startswith(('01', '10', '11', '12', '13', '14', '15', '16', '17', '18'))
         filtered = [s for s in symbols if _is_a_share(s)]
         removed = len(symbols) - len(filtered)
         if removed > 0:
