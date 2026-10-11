@@ -8,6 +8,19 @@
 
 ---
 
+## 📸 项目预览
+
+<p align="center">
+  <img src="docs/images/home.png" width="31%" alt="手机端首页：大盘指数看板 + PC端精选推荐" />
+  <img src="docs/images/detail.png" width="31%" alt="详情页决策卡：评级 / 置信度 / 建议仓位 / 买入依据" />
+  <img src="docs/images/backtest.png" width="31%" alt="策略近一年收益率：20日收益 / IC / IR / 价差" />
+</p>
+<p align="center">
+  <img src="docs/images/feishu.png" width="62%" alt="飞书推送：市场状态与每晚操作建议" />
+</p>
+
+---
+
 ## 📱 项目简介
 
 一个完整的 A 股量化交易辅助系统，由 **PC 端（选股引擎）**和 **手机端（实时监控）**两部分组成：

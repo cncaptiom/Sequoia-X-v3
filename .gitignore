@@ -60,3 +60,6 @@ skills-lock.json
 
 # 内部恢复/临时文件
 _recovery_checkpoint.json
+
+# 截图原图（未处理的素材，README 实际引用 docs/images/）
+tu/
