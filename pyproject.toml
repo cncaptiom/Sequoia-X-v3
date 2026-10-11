@@ -4,6 +4,8 @@ version = "3.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "baostock>=0.9",
+    # 仅用于股票名称列表（client.stocks()，走 TDX 的证券列表接口，仍可用）；
+    # K 线接口已被 TDX 服务端拒绝，行情数据源见 sequoia_x/data/sina_quote.py
     "mootdx>=0.7",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
@@ -23,6 +25,9 @@ dev = [
 ]
 factors = [
     "akshare>=1.18",
+]
+financial = [
+    "efinance>=0.5",
 ]
 
 [tool.ruff]

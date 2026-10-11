@@ -23,6 +23,9 @@ _CACHE_PATH = os.path.join(
 
 # 最新报告期尚无公司披露时（如 10 月初取 09-30 三季报），向前回退的报告期个数上限
 _MAX_REPORT_DATE_LOOKBACK = 4
+# 报告期刚开始披露时接口只返回少数几家公司（如 10 月初的三季报），
+# 低于这个数量视为「这一期还没数据」并继续回退，避免用残缺数据覆盖上一次的完整缓存
+_MIN_SYMBOLS_PER_REPORT = 1000
 
 # efinance 业绩表中文列 → fundamental 字段
 CODE_COL = "股票代码"
@@ -88,13 +91,17 @@ def _fetch_performance():
         except Exception as exc:
             logger.warning(f"efinance 报告期 {report_date} 拉取失败: {exc}")
             continue
-        if df is not None and not df.empty:
-            if report_date != candidates[0]:
-                logger.info(
-                    f"最新报告期 {candidates[0]} 尚无披露，efinance 财务数据改用 "
-                    f"{report_date}（{len(df)} 只）"
-                )
-            return df, report_date
+        if df is None or df.empty:
+            continue
+        if len(df) < _MIN_SYMBOLS_PER_REPORT:
+            logger.info(f"报告期 {report_date} 仅 {len(df)} 只已披露，改用上一期")
+            continue
+        if report_date != candidates[0]:
+            logger.info(
+                f"最新报告期 {candidates[0]} 尚无披露，efinance 财务数据改用 "
+                f"{report_date}（{len(df)} 只）"
+            )
+        return df, report_date
     return None, None
 
 

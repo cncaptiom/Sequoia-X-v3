@@ -464,6 +464,7 @@ class FeishuNotifier:
             f"趋势: {bias.get('trend', 0):.0%}",
             f"动量: {bias.get('momentum', 0):.0%}",
             f"反转: {bias.get('reversal', 0):.0%}",
+            f"基本面: {bias.get('fundamental', 0):.0%}",
         ]
         content = (
             f"**日期：** {today}\n"

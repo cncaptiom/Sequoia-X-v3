@@ -54,3 +54,69 @@ def test_unique_symbol_date_constraint(symbol: str, trade_date: date) -> None:
         finally:
             conn.close()  # 显式关闭，避免 Windows 下临时文件被占用
         assert count == 1
+
+
+def test_is_a_share_excludes_indices_and_bonds() -> None:
+    """过滤器要剔除指数与债券，但保留与指数同号的真实个股。
+
+    000016 既是上证50指数又是深市个股深康佳A，代码本身合法，应保留。
+    """
+    from sequoia_x.data.engine import _BENCHMARK_INDEX_SYMBOLS, _is_a_share
+
+    for code in ("399006", "395015", "360001", "019003", "020780", "018003", "010609"):
+        assert not _is_a_share(code), f"{code} 是指数/债券，不应通过"
+    for code in _BENCHMARK_INDEX_SYMBOLS:
+        assert not _is_a_share(code), f"基准指数 {code} 不应参与个股扫描"
+    for code in ("600000", "300750", "688252", "002594", "000016"):
+        assert _is_a_share(code), f"{code} 是正常个股，应通过"
+
+
+def test_benchmark_index_not_routed_through_stock_quote(tmp_path, monkeypatch) -> None:
+    """sync_today_bulk 必须把基准指数与个股分开取数。
+
+    000905 既是中证500指数又是深市个股厦门港务。若按裸代码走个股行情源，
+    厦门港务的价格会逐日覆盖指数序列，让 RegimeDetector 读到 -99.9% 的断崖、
+    regime 恒定为强熊。这里断言基准指数不进个股快照，而是带 sh. 代码交给 baostock。
+    """
+    import sequoia_x.data.sina_quote as sina_mod
+    from sequoia_x.data.engine import _BENCHMARK_BS_CODES
+
+    engine, _ = make_engine_in(str(tmp_path))
+    with sqlite3.connect(engine.db_path) as conn:
+        conn.executemany(
+            "INSERT INTO stock_daily(symbol,date,open,high,low,close,volume,turnover)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            [
+                ("000905", "2026-08-21", 1, 1, 1, 7854.33, 1, 1),  # 指数
+                ("600000", "2026-08-21", 1, 1, 1, 9.0, 1, 1),  # 个股
+            ],
+        )
+        conn.commit()
+
+    snapshot_symbols: list[set[str]] = []
+
+    def fake_snapshot(symbols):
+        snapshot_symbols.append(set(symbols))
+        return [], list(symbols)  # 模拟一个都没取到
+
+    monkeypatch.setattr(sina_mod, "fetch_snapshot", fake_snapshot)
+
+    baostock_calls: list[tuple[list[str], dict]] = []
+
+    def fake_baostock(self, symbols, missing, bs_code_map=None):
+        baostock_calls.append((sorted(symbols), dict(bs_code_map or {})))
+        return []
+
+    monkeypatch.setattr(DataEngine, "_baostock_fetch_daily", fake_baostock)
+
+    engine.sync_today_bulk()
+
+    assert snapshot_symbols, "未调用个股快照"
+    assert "000905" not in snapshot_symbols[0], "基准指数不能进入个股行情源"
+    assert "600000" in snapshot_symbols[0]
+
+    benchmark_calls = [c for c in baostock_calls if "000905" in c[0]]
+    assert benchmark_calls, "基准指数应单独走 baostock"
+    assert benchmark_calls[0][1]["000905"] == _BENCHMARK_BS_CODES["000905"], (
+        "基准指数必须用 sh. 前缀，否则会取到同号个股"
+    )

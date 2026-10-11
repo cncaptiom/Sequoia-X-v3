@@ -28,6 +28,7 @@ from sequoia_x.rating.strategies import (
     volume_price_strategy,
 )
 from sequoia_x.core.logger import get_logger
+from sequoia_x.regime import REGIME_BIAS as _REGIME_BIAS
 from sequoia_x.signal.quality import winsorize, standardize
 
 logger = get_logger(__name__)
@@ -119,19 +120,9 @@ class RatingConfig:
         "kdj": "kdj",
         "fundamental": "fundamental",
     }
-    # 各市场状态下策略类别的偏向权重（2026-08 全量因子验证校准）
-    # 实证依据（2024-01~2026-08，5206只/584交易日）：
-    #   · 超跌反转信号(sig_meanrev) 20日超额+0.59% 胜率56.9%；熊市胜率85.4%、超额+1.17% → 熊市 reversal 主导
-    #   · 趋势突破(sig_turtle) 熊市超额-3.24%（假突破多）→ 熊市 trend 权重极低
-    #   · 动量类(maCross) 横截面IC全程为负（-0.24最差）→ momentum 权重最低
-    #   · fundamental 独立维度，防御性，熊市保持稳定权重
-    REGIME_BIAS = {
-        "强牛": {"trend": 0.22, "momentum": 0.12, "reversal": 0.34, "fundamental": 0.32},
-        "弱牛": {"trend": 0.16, "momentum": 0.12, "reversal": 0.40, "fundamental": 0.32},
-        "震荡": {"trend": 0.14, "momentum": 0.08, "reversal": 0.46, "fundamental": 0.32},
-        "弱熊": {"trend": 0.06, "momentum": 0.04, "reversal": 0.58, "fundamental": 0.32},
-        "强熊": {"trend": 0.00, "momentum": 0.00, "reversal": 0.68, "fundamental": 0.32},
-    }
+    # 各市场状态下策略类别的偏向权重：唯一来源是 sequoia_x.regime.REGIME_BIAS，
+    # 那里同时供 RegimeResult.strategy_bias 展示，避免两套口径打架。
+    REGIME_BIAS = _REGIME_BIAS
 
     def apply_regime(self, regime_label: str) -> None:
         """根据市场状态动态调整各策略权重（每类权重均分给该类【启用】策略）。

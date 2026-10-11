@@ -123,7 +123,8 @@ python main.py
 ## 五、待办 (后续阶段)
 
 - [ ] 阶段二续: 改造各策略 run() 直接返回 TradeSignal
-- [ ] 阶段三续: 周线/60分钟线多周期确认过滤假突破
+- [~] 阶段三续: 多周期确认过滤假突破 —— **周线过滤已实现**（`signal/generator.py`，
+  ±0.10 加减分）；60分钟线未做
 - [ ] 阶段四: 申万一级行业轮动评分
 - [ ] 阶段四: 实盘模拟记录+命中率追踪
 - [ ] 阶段五: 回测驱动的参数自适应优化
@@ -234,8 +235,65 @@ python main.py
 
 ## 九、已知问题
 
-- `main.py` 日常流程中 `strategy_regime_weights` 计算后仅用于日志，未传入 `ConsensusEngine`
-  （该引擎按策略数量与类型打分，不接权重；实际评分权重以 `--rating` 路径的 `REGIME_BIAS` 为准）
-- `sequoia_x/regime/__init__.py` 的 `REGIME_STRATEGY_BIAS` 仍为等权表（供 `RegimeResult.strategy_bias` 展示），
-  与 `rating/engine.py` 的 `REGIME_BIAS` 并存，二者口径不一致
-- `efinance` 未声明在 `pyproject.toml`，需手动 `pip install efinance`（缺失自动回退）
+- `main.py` 日常流程中策略评分不接市场状态权重（`ConsensusEngine` 按策略数量与类型打分）；
+  实际评分权重以 `--rating` 路径的 `REGIME_BIAS` 为准。原先那段「算完只打日志」的
+  `strategy_regime_weights` 死代码已于 2026-10-11 删除。
+
+  > 以下三项已于 2026-10-11 修复，见文末「2026-10 更新」：
+  > ~~`REGIME_STRATEGY_BIAS` 等权表与 `REGIME_BIAS` 口径不一致~~、
+  > ~~`efinance` 未声明在 `pyproject.toml`~~、
+  > ~~`--mootdx-backfill` 静默空转~~。
+
+---
+
+# 2026-10 更新
+
+## 一、修复 `--rating` 报 `WinError 10054`
+
+根因是 efinance 全市场财务拉取在报告期刚切换（尚无公司披露）时抛错并被永久禁用，
+导致每只过趋势的股票都回退 baostock 逐股查财务，请求量暴涨触发服务端踢线；
+而 baostock 的 `send_msg` 无接收超时、异常被吞掉只打印，调用方拿到 `None`
+无法感知，分页读取还会静默截断。
+
+- 新增 `utils/baostock_guard.py`：在 `send_msg` 这一唯一出口加 30s 接收超时 +
+  断线 `logout`/`login` 重连并重发同一请求；重试耗尽后仍返回 `None` 并保留原有提示，
+  对外契约不变，全项目既有调用点无需改动
+- `efinance_financial`：最新报告期拉不到就逐期回退（实测回退到 `2026-06-30`），
+  单次失败不再永久禁用；失败时回退本地磁盘缓存而非静默返回空
+
+## 二、日常增量数据源替换（mootdx → 新浪批量快照）
+
+TDX 服务端已拒绝 K 线请求（`TdxFunctionCallError`），mootdx 取不到任何行情，
+`sync_today_bulk` 只能降级 baostock，而那段兜底开 8 线程共用一把全局锁（实际完全串行）
+且设了 300s 硬截止，每晚只能补约 1850/5700 只，数据缺口滚雪球。
+
+- 新增 `data/sina_quote.py`：`hq.sinajs.cn/list=` 一次带 250 个代码，全市场约 20 个请求；
+  成交量单位是「股」、成交额是「元」，与 `stock_daily` 口径一致
+- `sync_today_bulk`：新浪快照为主（日增量），多日缺口降级 baostock；
+  去掉假并行与硬截止
+- `compute_staleness_report` / `compute_data_health_report`：过期率改用**交易日**计数
+  （原先按自然日，国庆后误报 67.6%，实际只有 4.9%）
+- `get_all_symbols` 改用 baostock（原 mootdx 列表按名称黑名单过滤，会把指数当股票返回）
+
+## 三、基准指数被同号个股覆盖（regime 失真）
+
+`000905` 既是中证500指数、又是深市个股厦门港务，库内按裸 6 位存储导致两者冲突。
+日增量同步每日把该股的行情写进指数序列，自 2026-08-24 起指数数据被整段污染
+（8000 点 → 9 元），`RegimeDetector` 读到的 `价格vsMA120 = -99.9%`，
+**无论真实市场如何都被判为强熊**。
+
+- 基准指数（`sh.000905` / `sh.000300`）改用 baostock 显式代码单独更新，不走个股行情源
+- 已删除被污染的 29 行并重新回补指数，现在 `价格vsMA120 = -10.7%`、建议仓位 10% → 15%
+
+## 四、其他修复
+
+- `get_local_symbols`：`_is_a_share` 原规则放行了 `399` 深证指数等，导致 207 个指数
+  被当成个股评级并写进 `rating_result`；改为排除 `010/018/019/020/360/395/399`
+  与基准指数
+- `verify_prices`（`--verify-data`）：取不到数据原先一律计为「通过」，mootdx 死后
+  会报出 100% 一致的假结果；改为对比 baostock 并分别统计 比对/通过/异常/跳过
+- 移除死路径：`--mootdx-backfill`、`backfill_from_mootdx`、`_mootdx_get_symbols` 等
+- 统一 regime 权重表：`REGIME_STRATEGY_BIAS`（等权）与 `REGIME_BIAS`（反转主导）合并为
+  `sequoia_x.regime.REGIME_BIAS` 单一来源，飞书/手机端展示的不再是错数字
+- 清理 `stock_daily` 中 466 个非 A 股代码（债券/指数，182,015 行），数据过期率 67.6% → 0.4%
+- `pyproject.toml` 补声明 `efinance`（optional-dependencies.financial）

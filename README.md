@@ -34,9 +34,9 @@ PC端 (每晚21:00自动运行)
 ### 核心架构
 
 ```
-mootdx(主数据源) ─→ SQLite ─→ 6策略选股 ─→ ConsensusEngine融合
+新浪快照(日增量) ─→ SQLite ─→ 6策略选股 ─→ ConsensusEngine融合
                                    ↓
-baostock(备选) ─→ 数据清洗 ←─── 9策略评级(市场状态加权)
+baostock(缺口/回填) ─→ 数据清洗 ←─── 9策略评级(市场状态加权)
                                    ↓
 efinance(可选财务) ─┘       SignalGenerator信号生成
                                    ↓
@@ -46,9 +46,11 @@ efinance(可选财务) ─┘       SignalGenerator信号生成
 ```
 
 数据源说明：
-- **mootdx** 主数据源（TCP 协议，回填/增量均优先）
-- **baostock** 备选数据源（mootdx 缺失时回退）
+- **新浪财经批量快照** 日增量主数据源（`hq.sinajs.cn/list=`，一次 250 个代码，全市场约 20 个请求）
+- **baostock** 缺口补齐与历史回填（前复权，含成交额；基准指数也走它，见下）
 - **efinance** 可选，用于 fundamental 策略的全市场财务数据批量拉取（约 8s/5500只，含 ROE/营收增速/毛利率）；未安装或不可用时自动回退到 baostock 逐股查询
+- **mootdx** 仅用于股票名称列表（TDX 服务端已拒绝 K 线请求，不再取行情）
+- **基准指数**（中证500 = `sh.000905`、沪深300 = `sh.000300`）：与深市个股同号（000905 同时是厦门港务），因此单独用 baostock 的 `sh.` 代码更新，不走个股行情源
 
 ### 6 大选股策略
 
@@ -184,7 +186,7 @@ macdRsi        0.00   横截面 IC 为负，默认关闭
 - **复权跳变防护**：评级数据加载走 `get_ohlcv_rating_safe()`，跳过最近含未复权跳变的股票
 - **ST 过滤**：评级扫描前剔除 ST 股票
 - **涨跌停 + 印花税**：已计入回测成交约束
-- **数据一致性校验**：`--verify-data` 对比 mootdx 与腾讯财经收盘价
+- **数据一致性校验**：`--verify-data` 抽样对比库内最新收盘价与 baostock 前复权收盘价，分别统计比对/通过/异常/跳过（取不到数据不再算作「通过」）
 
 ---
 
@@ -258,11 +260,11 @@ cp .env.example .env
 ### 3. 回填历史数据
 
 ```bash
-# 推荐（TCP协议更稳定）
-python main.py --mootdx-backfill
-
-# 或并行回填（8进程）
+# 推荐：并行回填（baostock，8进程，全市场约 3-4 分钟）
 python main.py --parallel-backfill
+
+# 或串行回填
+python main.py --backfill
 ```
 
 ### 4. 运行
@@ -301,14 +303,13 @@ python main.py --install-schedule
 |------|------|
 | `python main.py` | 日常模式：增量更新 + 6策略选股 + 推送 |
 | `python main.py --rating` | 评级模式：全市场9策略评分 + 前15名操作建议 |
-| `python main.py --mootdx-backfill` | mootdx回填全市场历史数据 |
 | `python main.py --backfill` | 串行回填（baostock） |
 | `python main.py --parallel-backfill` | 并行回填（baostock，8进程） |
 | `python main.py --backtest` | 全策略回测 |
 | `python main.py --regime` | 市场状态检测 |
 | `python main.py --factors TOP20` | 多因子选股 |
 | `python main.py --review` | 推荐命中率回溯 |
-| `python main.py --verify-data` | 数据一致性校验（mootdx vs 腾讯财经） |
+| `python main.py --verify-data` | 数据一致性抽样校验（库内 vs baostock） |
 | `python main.py --refresh-history` | 定向重刷有未复权跳变的股票 |
 | `python main.py --refresh-history-all` | 全量重刷历史（耗时数小时，非交易时段执行） |
 | `python main.py --install-schedule` | 安装 Windows 定时任务 |
@@ -376,7 +377,7 @@ Sequoia-X-v3/
 │
 ├── sequoia_x/              # PC端核心代码
 │   ├── core/               # 配置 + 日志
-│   ├── data/               # 数据引擎（mootdx/baostock + SQLite + efinance）
+│   ├── data/               # 数据引擎（新浪快照/baostock + SQLite + efinance）
 │   ├── strategy/           # 6个选股策略
 │   ├── rating/             # 9个评级策略 + 评分引擎
 │   ├── signal/             # 交易信号生成 + IC信号质量监控
@@ -415,7 +416,7 @@ Sequoia-X-v3/
 ```
                         PC端（每晚21:00）
 
-mootdx ──→ baostock(备)
+新浪快照 ──→ baostock(缺口)
     │
     ▼
 SQLite ──→ DataValidator ──→ 6策略并行选股

@@ -56,7 +56,7 @@ def _check_data_freshness(engine, logger) -> dict:
     stale = report.get("stale_symbols", 0)
     total = report.get("total_symbols", 0)
     fresh = total - stale
-    logger.info(f"数据新鲜度: {fresh}/{total} 只5日内有更新, {stale} 只数据过期")
+    logger.info(f"数据新鲜度: {fresh}/{total} 只近5个交易日有更新, {stale} 只数据过期")
     if total > 0 and stale > total * 0.3:
         logger.warning(f"超过30%股票数据过期，选股结果可能不准确！建议执行 --backfill 或检查网络")
     return report
@@ -349,35 +349,7 @@ def _run_daily(settings, logger, engine, notifier) -> None:
         regime_warning = f"[Bear {regime.label} exposure {regime.suggested_exposure:.0%}] "
 
     # ── 策略分类（与 regime 模块的策略偏向定义一致） ──
-    STRATEGY_CATEGORIES = {
-        "trend": ["MaVolumeStrategy", "TurtleTradeStrategy"],
-        "momentum": ["RpsBreakoutStrategy", "HighTightFlagStrategy"],
-        "reversal": ["LimitUpShakeoutStrategy", "UptrendLimitDownStrategy"],
-    }
-    # 每类策略中各策略的基础权重（同类中可不等权）
-    CATEGORY_STRATEGY_WEIGHTS = {
-        "trend": {"MaVolumeStrategy": 0.5, "TurtleTradeStrategy": 0.5},
-        "momentum": {"RpsBreakoutStrategy": 0.6, "HighTightFlagStrategy": 0.4},
-        "reversal": {"LimitUpShakeoutStrategy": 0.5, "UptrendLimitDownStrategy": 0.5},
-    }
-
-    # 根据市场状态计算每个策略的最终权重
-    # regime.strategy_bias = {"trend": 0.5, "momentum": 0.3, "reversal": 0.2}
-    strategy_regime_weights: dict[str, float] = {}
-    for category, bias_weight in regime.strategy_bias.items():
-        cat_strats = STRATEGY_CATEGORIES.get(category, [])
-        inner_weights = CATEGORY_STRATEGY_WEIGHTS.get(category, {})
-        for s in cat_strats:
-            inner_w = inner_weights.get(s, 1.0 / max(len(cat_strats), 1))
-            strategy_regime_weights[s] = bias_weight * inner_w
-
-    # 归一化
-    total_regime_w = sum(strategy_regime_weights.values())
-    if total_regime_w > 0:
-        for s in strategy_regime_weights:
-            strategy_regime_weights[s] /= total_regime_w
-
-    logger.info(f"市场状态: {regime.label} | 策略权重: {strategy_regime_weights}")
+    logger.info(f"市场状态: {regime.label} | 策略偏向: {regime.strategy_bias}")
 
     all_strategies: list[BaseStrategy] = [
         MaVolumeStrategy(engine=engine, settings=settings),
@@ -995,25 +967,34 @@ def _run_factors(settings, logger, engine, top_n_str: str) -> None:
 
 
 def _run_verify_data(settings, logger, engine) -> None:
-    """验证 mootdx 与腾讯财经的收盘价一致性。"""
+    """抽样比对库内最新收盘价与 baostock 前复权收盘价。"""
     from sequoia_x.data.engine import DataValidator
 
     symbols = engine.get_local_symbols()
     logger.info(f"数据一致性验证: {len(symbols)} 只股票")
 
-    result = DataValidator.verify_prices(symbols=symbols, sample_size=min(200, len(symbols)))
+    result = DataValidator.verify_prices(
+        db_path=engine.db_path, symbols=symbols, sample_size=min(200, len(symbols))
+    )
 
     sep = "=" * 60
     print(f"\n{sep}")
-    print("  数据一致性验证结果")
+    print("  数据一致性验证结果（库内最新收盘 vs baostock 前复权）")
     print(sep)
-    print(f"  验证: {result['total']} 只")
-    print(f"  通过: {result['passed']} 只 ({result.get('passed_pct',0)}%)")
+    print(f"  抽样: {result['total']} 只")
+    print(f"  比对: {result['compared']} 只")
+    print(f"  通过: {result['passed']} 只")
     print(f"  异常: {result['failed']} 只")
+    print(f"  跳过: {result['skipped']} 只（库内无数据或 baostock 取不到）")
+    if result["passed_pct"] is None:
+        print("  警告: 没有任何一条真正比对成功，结论是『未验证』而不是『一致』")
+    else:
+        print(f"  一致率: {result['passed_pct']}%（分母为已比对数 {result['compared']}）")
     if result['issues']:
-        print("\n  异常详情（差异>1%）:")
+        print("\n  异常详情（差异 >1%）:")
         for issue in result['issues'][:10]:
-            print(f"    {issue['symbol']}: mootdx={issue['mootdx_close']} 腾讯={issue['tencent_close']} 差异={issue['diff_pct']}%")
+            print(f"    {issue['symbol']} {issue['date']}: 库内={issue['db_close']} "
+                  f"baostock={issue['baostock_close']} 差异={issue['diff_pct']}%")
         if len(result['issues']) > 10:
             print(f"    ... 共 {len(result['issues'])} 只异常")
     print(sep)
@@ -1102,10 +1083,6 @@ def main() -> None:
         help="多因子选股（取排名前N只）",
     )
     parser.add_argument(
-        "--mootdx-backfill", action="store_true",
-        help="使用 mootdx 回填历史数据（TCP协议，更稳定）",
-    )
-    parser.add_argument(
         "--parallel-backfill", action="store_true",
         help="并行回填历史数据（8进程）",
     )
@@ -1115,7 +1092,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--verify-data", action="store_true",
-        help="验证数据一致性：对比 mootdx 与腾讯财经的收盘价",
+        help="验证数据一致性：抽样对比库内收盘价与 baostock 前复权收盘价",
     )
     parser.add_argument(
         "--refresh-history", action="store_true",
@@ -1178,16 +1155,6 @@ def main() -> None:
             all_symbols = engine.get_all_symbols()
             engine.backfill_parallel(all_symbols)
             logger.info("Sequoia-X V3 并行回填完成")
-            return
-
-        if args.mootdx_backfill:
-            logger.info("进入 mootdx 回填模式...")
-            from sequoia_x.data.engine import _mootdx_get_symbols
-            symbols_df = _mootdx_get_symbols()
-            all_symbols = symbols_df['symbol'].tolist()
-            logger.info(f"mootdx 获取 {len(all_symbols)} 只股票")
-            engine.backfill_from_mootdx(symbols=all_symbols)
-            logger.info("mootdx 回填完成")
             return
 
         if args.refresh_history or args.refresh_history_all:

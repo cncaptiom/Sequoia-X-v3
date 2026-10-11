@@ -54,15 +54,23 @@ REGIME_EXPOSURE = {
     MarketRegime.STRONG_BEAR: 0.15,
 }
 
-# 各状态下的策略类型权重偏向
-REGIME_STRATEGY_BIAS = {
-    # 所有市场状态统一等权分配
-    # 原因：缺乏足够数据支撑不同状态下策略收益有显著差异
-    MarketRegime.STRONG_BULL: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
-    MarketRegime.WEAK_BULL: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
-    MarketRegime.RANGE: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
-    MarketRegime.WEAK_BEAR: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
-    MarketRegime.STRONG_BEAR: {"trend": 0.34, "momentum": 0.33, "reversal": 0.33},
+# 各市场状态下策略类别的权重偏向（2026-08 全量因子验证校准）
+#
+# 全项目唯一的 regime 权重表：rating/engine.py::apply_regime 直接引用它，
+# RegimeResult.strategy_bias（飞书推送 / COS / --regime 展示）也用它，
+# 避免出现两套口径互相打架。
+#
+# 实证依据（2024-01~2026-08，5206只 / 584交易日）：
+#   · 超跌反转信号 20日超额+0.59% 胜率56.9%；熊市胜率85.4%、超额+1.17% → 熊市 reversal 主导
+#   · 趋势突破 熊市超额-3.24%（假突破多）→ 熊市 trend 权重极低
+#   · 动量类 横截面 IC 全程为负 → momentum 权重最低
+#   · fundamental 独立防御维度，熊市保持稳定权重
+REGIME_BIAS = {
+    "强牛": {"trend": 0.22, "momentum": 0.12, "reversal": 0.34, "fundamental": 0.32},
+    "弱牛": {"trend": 0.16, "momentum": 0.12, "reversal": 0.40, "fundamental": 0.32},
+    "震荡": {"trend": 0.14, "momentum": 0.08, "reversal": 0.46, "fundamental": 0.32},
+    "弱熊": {"trend": 0.06, "momentum": 0.04, "reversal": 0.58, "fundamental": 0.32},
+    "强熊": {"trend": 0.00, "momentum": 0.00, "reversal": 0.68, "fundamental": 0.32},
 }
 
 
@@ -105,7 +113,7 @@ class RegimeDetector:
                 regime=MarketRegime.RANGE,
                 label="震荡(默认)",
                 suggested_exposure=0.50,
-                strategy_bias=REGIME_STRATEGY_BIAS[MarketRegime.RANGE],
+                strategy_bias=REGIME_BIAS["震荡"],
                 trend_strength=0.0,
                 volatility_regime="normal",
                 volatility_pct=0.5,
@@ -117,7 +125,7 @@ class RegimeDetector:
                 regime=MarketRegime.RANGE,
                 label="震荡(数据不足)",
                 suggested_exposure=0.50,
-                strategy_bias=REGIME_STRATEGY_BIAS[MarketRegime.RANGE],
+                strategy_bias=REGIME_BIAS["震荡"],
                 trend_strength=0.0,
                 volatility_regime="normal",
                 volatility_pct=0.5,
@@ -202,7 +210,7 @@ class RegimeDetector:
             regime=regime,
             label=REGIME_LABELS.get(regime, "未知"),
             suggested_exposure=round(suggested_exposure, 2),
-            strategy_bias=REGIME_STRATEGY_BIAS.get(regime, REGIME_STRATEGY_BIAS[MarketRegime.RANGE]),
+            strategy_bias=REGIME_BIAS.get(REGIME_LABELS.get(regime, ""), REGIME_BIAS["震荡"]),
             trend_strength=round(trend_strength, 2),
             volatility_regime=vol_regime,
             volatility_pct=round(float(vol_percentile), 2),
