@@ -159,7 +159,6 @@ class SignalGenerator:
             var_95=var_95,
             atr_ratio=atr_ratio,
             recent_max_dd=recent_max_dd,
-            symbol=symbol,
         )
 
         # ---- 生成选中理由 ----
@@ -228,11 +227,10 @@ class SignalGenerator:
         var_95: float = 0.05,
         atr_ratio: float = 0.0,
         recent_max_dd: float = 0.0,
-        symbol: str = "",
     ) -> tuple[float, dict]:
-        """综合置信度计算 v3.2 — 7 维度评分 + 风险控制 + 市场修正。
+        """综合置信度计算 v3.3 — 6 维度评分 + 风险控制 + 市场修正。
 
-        参考 综合评分.docx 框架，加入市场状态修正、资金流向加分。
+        参考 综合评分.docx 框架，加入市场状态修正。
 
         Args:
             market_regime: 市场状态标签（强牛/弱牛/震荡/弱熊/强熊），用于修正置信度。
@@ -243,11 +241,11 @@ class SignalGenerator:
         score = 0.0
         details: dict[str, float] = {}
 
-        # 1. 多策略确认（满分 0.25）— 策略数量越多越可信
+        # 1. 多策略确认（满分 0.30）— 策略数量越多越可信
         strategy_count = len(strategies)
         if strategy_count >= 3:
-            score += 0.25
-            details["多策略共振"] = 0.25
+            score += 0.30
+            details["多策略共振"] = 0.30
         elif strategy_count == 2:
             score += 0.15
             details["多策略共振"] = 0.15
@@ -295,12 +293,7 @@ class SignalGenerator:
         else:
             details["量价共振"] = 0.0
 
-        # 7. 资金流向加分（满分 0.05）— 可选，从 flow 模块获取
-        flow_score = self._calc_flow_bonus(df, symbol)
-        score += flow_score
-        details["资金流向"] = flow_score
-
-        # 8. 风险控制修正（-0.10 ~ +0.05）— 波动太大降信心
+        # 7. 风险控制修正（-0.10 ~ +0.05）— 波动太大降信心
         risk_score = 0.0
         # ATR 比率过高 → 波动剧烈 → 扣分
         if atr_ratio > 0.05:
@@ -352,46 +345,6 @@ class SignalGenerator:
             details["周线过滤"] = 0.0
 
         return min(score, 1.0), details
-
-    def _calc_flow_bonus(self, df: pd.DataFrame = None, symbol: str = "") -> float:
-        """计算资金流向加分。
-
-        使用北向资金数据（通过 akshare，超时保护），
-        如果数据不可用则降级到量价估算。
-        """
-        # 尝试真实资金流数据（带超时保护）
-        if symbol:
-            try:
-                import threading
-                result = [0.0]
-                def _run():
-                    try:
-                        import akshare as ak
-                        hsgt = ak.stock_hsgt_individual_em(symbol=symbol)
-                        if hsgt is not None and not hsgt.empty and len(hsgt) > 1:
-                            result[0] = 0.03
-                    except Exception:
-                        result[0] = 0.0
-                t = threading.Thread(target=_run, daemon=True)
-                t.start()
-                t.join(timeout=3)
-                if t.is_alive():
-                    pass  # 超时，后台线程自生自灭（daemon=True）
-                else:
-                    if result[0] > 0:
-                        return result[0]
-            except Exception:
-                pass
-
-        # 降级：量价估算（永不阻塞）
-        if df is None or len(df) < 5:
-            return 0.0
-        recent = df.tail(5)
-        rising = (recent["close"].iloc[-1] > recent["close"].iloc[0])
-        vol_ok = (recent["volume"].mean() > df["volume"].tail(20).mean())
-        if rising and vol_ok:
-            return 0.05
-        return 0.0
 
     def _entry_condition_text(self, low: float, high: float, ma20: float, ma5: float) -> str:
         """生成可读的买入触发条件。"""

@@ -159,19 +159,18 @@ macdRsi        0.00   横截面 IC 为负，默认关闭
 
 趋势过滤未通过时评级上限降级为 B（软过滤，不丢弃评分）。
 
-### 置信度评分（7 维度）
+### 置信度评分（6 维度）
 
 信号生成器（`signal/generator.py`）在评级之外另算一个 0~1 的综合置信度：
 
 | 维度 | 满分 | 说明 |
 |------|------|------|
-| 多策略共振 | 0.25 | ≥3个策略选中满分，2个 0.15，1个 0.10 |
+| 多策略共振 | 0.30 | ≥3个策略选中满分，2个 0.15，1个 0.10 |
 | 趋势强度 | 0.20 | 均线多头排列 |
 | 量价配合 | 0.15 | 放量上涨；缩量回调 0.05 |
 | 安全边际 | 0.15 | 接近支撑位 |
 | 低波动环境 | 0.10 | 走势稳定 |
 | 量价共振 | 0.10 | 放量 + 多头趋势同时满足 |
-| 资金流向 | 0.05 | 北向资金增持（akshare，超时降级为量价估算） |
 
 附加修正：
 - **风险控制** −0.13 ~ +0.05（ATR比率 / VaR / 近期最大回撤）
@@ -259,7 +258,7 @@ Flutter / Provider / Dio / Hive / fl_chart
 git clone https://github.com/cncaptiom/Sequoia-X-v3.git
 cd Sequoia-X-v3
 pip install .
-pip install ".[factors]"    # 多因子/资金流（akshare），可选
+pip install ".[factors]"    # 可选扩展（akshare），当前主包已无代码引用
 pip install efinance        # fundamental 财务数据走全市场批量，可选（缺失则回退 baostock）
 ```
 
@@ -400,7 +399,6 @@ Sequoia-X-v3/
 │   ├── eval/               # 历史回放工具（逐日评分重建 / regime序列）
 │   ├── risk/               # 风险管理（ATR/Kelly/VaR）
 │   ├── factors/            # 多因子模型（Fama-French）
-│   ├── flow/               # 资金流向分析
 │   ├── backtest/           # 回测引擎
 │   ├── analysis/           # 技术分析
 │   ├── notify/             # 飞书通知

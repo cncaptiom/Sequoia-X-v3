@@ -693,10 +693,27 @@ def _run_rating(settings, logger, engine, notifier) -> None:
         json.dump(export, f, ensure_ascii=False, indent=2)
     logger.info(f"评级结果已导出: {json_path} ({len(export)} 只)")
 
-    # ── 综合推荐报告：按总分排序取前15名，全部推送操作建议 ──
+    # ── 综合推荐报告：按 (评级类别, 总分) 取前 15 名，全部推送操作建议 ──
     # 不再只筛选 strong_buy/buy，所有有评分的股票按总分排名展示
     # 这样用户可以看到从"强烈买入"到"关注"的完整梯队
-    candidates = all_results[:15]  # 按评级+总分排序后的前15名
+    #
+    # 第 15 名常有大量同分股票，直接 all_results[:15] 会按输入顺序任意截断
+    # （名单由股票列表顺序决定，输入集合一变就可能变）。
+    # 因此先放宽候选池到「第 15 名及以上 + 所有同评级同分者」，
+    # 等 batch_generate 算出置信度后，再用置信度作为并列时的二级排序键截断。
+    TOP_N = 15
+    POOL_CAP = 200  # 防御：极端并列时不让候选池无限膨胀
+    RATING_ORDER = {"strong_buy": 0, "buy": 1, "watch": 2, "attention": 3, "avoid": 4}
+
+    def _production_key(r) -> tuple:
+        return (RATING_ORDER.get(r.rating, 5), -r.total_score)
+
+    if len(all_results) >= TOP_N:
+        cut_key = _production_key(all_results[TOP_N - 1])
+        candidates = [r for r in all_results if _production_key(r) <= cut_key][:POOL_CAP]
+    else:
+        candidates = list(all_results)
+    logger.info(f"推荐候选池: {len(candidates)} 只（含并列同分者）")
 
     if candidates:
         # 构建 strategy_map: {symbol: [positive_score_strategies]}
@@ -793,8 +810,13 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                 )
                 signals.append(sig)
 
-        # 按置信度降序排列，确保最高优先级的在前面
-        signals.sort(key=lambda s: s.confidence, reverse=True)
+        # 最终名单：先按 (评级类别, 总分)，并列时再按置信度降序，取前 TOP_N。
+        # batch_generate 只按置信度排过序，这里把评级维度补回来，
+        # 否则同分股票的顺序会由置信度而不是评级决定。
+        pool_key = {r.symbol: _production_key(r) for r in candidates}
+        signals.sort(key=lambda s: (pool_key.get(s.symbol, (9, 0.0)), -s.confidence))
+        signals = signals[:TOP_N]
+        logger.info(f"推送名单 {len(signals)} 只（排序：评级 → 总分 → 置信度）")
 
         # 评级分布统计
         rating_dist = {"strong_buy": 0, "buy": 0, "watch": 0, "attention": 0, "avoid": 0}
