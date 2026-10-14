@@ -346,3 +346,131 @@ TDX 服务端已拒绝 K 线请求（`TdxFunctionCallError`），mootdx 取不�
   （`get_data` 切片含当日）。使回测收益偏乐观。
 - **策略体系有两套**：`rating/strategies.py`（9 个函数，评级用）与 `strategy/*.py`
   （6 个类，融合评分/选股用），名字部分重叠但实现各自独立，且在多处被混用。
+
+## 八、推送与追踪口径修复（审查后第一批）
+
+- **追踪库一直是空的**：唯一写 `recommendations` 的是 `_run_daily`（`main.py:525`），
+  而生产实际跑的是 `--rating`（`_run_rating` 不写追踪库）、定时任务也未安装。
+  → `--review` 的命中率统计从来没有数据源。已在 `_run_rating` 补上 `record_signals`。
+- **三处截断三个数字**：`print_console` 打 20 条、`push_feishu` 推 15 条、tracker 记 50 条，
+  没有权威口径。新增 `reporter.DISPLAY_TOP_N = 15` 统一定义
+  （`_run_rating` 原先另有一套 `TOP_N = 15`，一并收敛；`print_console` 的 20 未动）。
+- **追踪静默丢弃低置信度推荐**：`tracker/review.py` 原有 `if sig.confidence < 0.5: continue`，
+  会把推送名单里置信度最低的那批丢掉；已删除，改为记录调用方传入的全部。
+- 新增只读诊断脚本 `run_rating_scale_check.py`
+- **87% `avoid` 查明**：= 469 只明显负分（≤-0.1）+ 3879 只微弱负分（-0.05~0，圆整为 `-0.0`）。
+  根因是「稀疏策略做 Z-score，把未触发编码成负分」（实测 `meanReversion` 89.6% 为负）
+  叠加「圆整与定级用了两个不同的数」（`rating/engine.py:596` 用 `round(total,1)`、
+  `:600` 用未圆整的 `total`）。后者使界面显示「总分 -0.0」却判为 `avoid`。
+- 完整台账见 `docs/code-review-2026-10-13.md`（H1–H6、M1–M13、L1 共 19 条 + D1–D5 设计层 5 条
+  + DOC1–DOC8 文档对齐 8 条）
+
+## 九、IC 历史重复污染修复（审查后第二批）
+
+`ICTracker._eval_record` 原先不持久化，导致每个尚未完成的 pending 快照在**每次运行**
+都被重新评估，向 `history` 重复追加同一天同一 lookforward 的 IC 条目——实测
+turtleTrade **774 条只有 41 个不同日期，同一日期最多重复 30 次**。
+另有周末快照永久卡死：`trade_dates.index()` 对非交易日抛 `ValueError` 后 `continue`，
+**跳过了「标记已计算」那行**，于是永不移除、每次运行重算一遍。
+
+IC 历史是权重调整的**唯一**输入（`apply_ir_weights` 把 IR ≤ 0 的策略权重直接清零），
+而 `detect_decay` 又是「从末尾数连续 IC<0 的**条目**」——数的是条目不是日期，
+20 条重复就满足「连续 20 天衰减」。**权重因此由被污染的数据决定。**
+
+- `signal/quality.py`：`_eval_record` 持久化（`__init__` 初始化、`_load` 恢复并转 int 键、
+  `save` 写入）；`eval_forward_returns` 不再每次重置它；新增 `_maybe_cleanup()`；
+  非交易日快照标记为已处理并清理
+- 新增 `dedup_ic_history.py`：一次性迁移，按 `(策略, 日期, lookforward)` 保留最后一条
+  并**按日期排序**（原顺序是「首次评估顺序」，而 `entries[-20:]` 取的是「最近 20 条」，
+  顺序必须真正对应日期）。实测 **4691 → 462 条（−90%）**，
+  备份 `output/ic_history.json.bak-20261013`
+- 新增 `show_ic_ir.py`：去重前后 IR 与归零判定对照
+
+**去重后 9 个策略里 3 个的判定翻转**（fundamental 保留→归零、kdj 与 turtleTrade
+归零→保留），证明原先那套「2 策略权重」确实是重复条目顶出来的。更关键的是：
+去重后 `turtleTrade` 的 IR 只有 **+0.0033**、`kdj` +0.098——这些决定生死的数字
+全落在 ±0.2 以内。**只要还用「IR 的符号」做硬清零，权重就是掷骰子。**
+该设计问题（D5）尚未处理，已列为最高优先级。
+
+## 十、D5 收口：权重不再由噪声 IC 决定（2026-10-14）
+
+第九节留下的 D5：`apply_ir_weights` 用 IR 的**符号**硬清零策略权重，而这些 IR 全落在
+噪声带内。本次先量化、再决策、最后改代码。
+
+### 量化（只读，新增 `show_ic_ir_significance.py`）
+
+**1. 先查出一个确凿的 bug：horizon 混编。** `ICTracker.get_summary` 的 `entries[-60:]`
+把同一天的 `lookforward=5` 与 `lookforward=20` 两条 IC 塞进同一个均值和标准差，
+`detect_decay` 也在这条混编序列上数「连续负 IC」。后果是组间方差被当成噪声进分母、
+|IR| 被系统性压小、符号还可能翻转：
+
+| 策略 | 5日 IR | 20日 IR | 混编 IR（原口径） |
+|---|---|---|---|
+| turtleTrade | +0.096 | +0.121 | **−0.070**（符号翻转） |
+| fundamental | +0.067 | −0.507 | −0.101（稀释到 1/5） |
+| maCross | −0.415 | −0.612 | −0.126（稀释到 1/5） |
+
+**2. 重叠窗口校正后的 θ。** h 日前瞻收益在连续交易日上是重叠的，教科书 SE(IR)=1/√n
+不成立（实测 ρ₁ 达 0.5~0.8）。改用 Newey-West（L = h − 1）后 θ = 2×SE(IR) 落在
+0.28~0.80，而原口径只有 0.29~0.56。6 个启用策略里只有 `meanReversion` 勉强过关
+（约 2.2σ）；换成 Harvey-Liu-Zhu 的多重检验门槛（k=3）则一个都不剩。
+
+**3. 样本代表性。** IC 历史只有约 42 个交易日（5 日序列）/ 35 个（20 日序列），
+且**全部落在同一个市场状态（熊市）**。`output/factor_validation.json` 的
+`market_regime_days` 显示 2024-01~2026-08 的 584 个交易日里 bull 318 / range 190 /
+**bear 只有 71**——连那份「大」数据集本身也是牛/震荡为主。
+
+### 决策依据
+
+- IC 样本（约 2 个月、单一状态）不足以支撑「清零一个 0.32 权重的策略」；regime 权重表
+  建立在 584 个交易日 / 5206 只股票之上，样本量高一个数量级
+- Harvey-Liu-Zhu (2016) 的多重检验门槛 k=3、DeMiguel-Garlappi-Uppal (2009) 的
+  「估计噪声大时先验优于估计权重」、Asness 等 (2018) 的「因子择时极难」三条一致指向
+  同一结论
+
+### 改动
+
+- **`signal/quality.py`**：新增 `_series(strategy, lookforward)`（按期限取序列、按日期排序、
+  同日去重）；`get_summary(lookforward=20)` 只在单一期限内统计，返回值加 `lookforward`；
+  `detect_decay` 同步按期限拆开——此前「连续 20 日」实际只有约 10 日；`print_summary`
+  按期限分块打印
+- **`rating/engine.py`**：`scan_market` 不再调用 `apply_ir_weights` 与
+  `_apply_ic_decay_weights`，**生产权重只由 `apply_regime`（市场状态）决定**；两个方法
+  保留供诊断脚本调用，文档字符串里写入了**预注册的重新启用条件**（每 regime 独立窗口
+  ≥ 20 个时才启用，k=3、Newey-West L=h−1、g(IR) 形状固定）
+- **`README.md`**：重写「动态权重」一节，同步架构图与脚本表
+- **`run_weight_validation.py` / `run_rating_neutral_ab.py`**：同步到新的权重口径（不再
+  复刻 IR 加权与 IC 衰减）；新增 `run_d5_weights_ab.py` 做本次改动的前后对照
+
+### 影响
+
+**在同一份冻结快照内反算**（`rating_result_20261014.json`，4993 只，市场状态 = 强熊；
+用 `per_strategy_scores` 复刻 `_combine_scores`，只换权重不换数据）：
+
+| 每策略权重 | 改动前 | 改动后 |
+|---|---|---|
+| mean_reversion | 0.40 | 0.34 |
+| kdj | 0.40 | 0.34 |
+| fundamental | 0.20 | **0.32** |
+
+- 强熊下 `REGIME_BIAS` 本就把 trend/momentum 压到 0.00，所以改动表现为 reversal 与
+  fundamental 之间的再分配。**注意：旧的 IR 层一直在把 fundamental 从 0.32 压到 0.20**
+  （因为去重后它的 IR 为负），与 regime 表「熊市保留防御维度」的设计意图相反
+- 总分平均变化 +0.003，但分布重排：2408 只升 / 1283 只降 / 1302 只持平
+- **总分 ≥1.0 的高分桶从 409 只收缩到 164 只**——新权重把 reversal 的 0.12 挪给
+  fundamental，而高分股大多由反转驱动，所以高分桶明显收窄
+- **按总分排序的 Top15 完全不变（15/15）**；实际推送还会叠加趋势上限
+  （`_calculate_rating` 对趋势不过的股票最高只给 watch），所以高分桶的收缩基本不传导到名单
+
+> **⚠️ 跨运行的对照不可信（本次实测发现）**：同一配置的两次全市场扫描给出
+> `buy` 数量 5 与 3、Top15 只重叠 7/15。原因是两次运行之间**输入数据会变**——
+> `sync_today_bulk` 会重写当日行情，efinance 财务缓存也可能被重取并回退到不同报告期
+> （本次实测缓存于 21:09 被重写、报告期回退到 2026-03-31）。
+> 因此 `run_d5_weights_ab.py` 已改为**冻结快照内反算**，不做跨运行比对。
+> 这个问题与 D5 无关，是独立的数据可复现性缺陷，**待办**。
+
+- 所有以权重为基线的历史对照（D1 的「446 只高分股被挡」、D3 的「87% avoid」等）都建立
+  在旧的随机权重上，需重测
+- 未处理：`ir_status` 的 0.5/1.0 阈值像是照 Grinold 式**年化** IC-IR 标尺搬来却套在
+  未年化的 per-observation IR 上（`quality.py:415`，出处见 `eff2902`）。仅用于展示，
+  不驱动决策，列为低优先级

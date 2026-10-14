@@ -327,7 +327,13 @@ def _remove_schedule() -> None:
 
 
 def _run_daily(settings, logger, engine, notifier) -> None:
-    """日常模式完整流程。"""
+    """日常模式（**备用回退路径**）。
+
+    入口是「无参数运行 `python main.py`」（main.py 末尾的兜底分支）。
+    生产实际跑的是 `--rating`（`_run_rating`），本函数目前未被使用——
+    注意它是**唯一**写追踪库（recommendations 表）的路径，所以 `--review`
+    依赖本函数是否被执行。详见 docs/code-review-2026-10-13.md 的 M13。
+    """
     # ── 数据新鲜度报告 ──
     _check_data_freshness(engine, logger)
 
@@ -484,7 +490,7 @@ def _run_daily(settings, logger, engine, notifier) -> None:
 
     try:
         from sequoia_x.signal import SignalGenerator
-        from sequoia_x.recommender import ReportGenerator
+        from sequoia_x.recommender import DISPLAY_TOP_N, ReportGenerator
         from datetime import datetime as _dt
 
         # strategy_map 已在 B 阶段构建完成，直接使用
@@ -519,10 +525,11 @@ def _run_daily(settings, logger, engine, notifier) -> None:
                 generated_at=_dt.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
 
-            # 记录推荐到数据库
+            # 记录推荐到数据库：只记实际推送给用户的那批（与 push_feishu 的
+            # DISPLAY_TOP_N 一致），否则命中率统计的分母会和用户看到的名单不符
             from sequoia_x.tracker import RecommendationTracker
             tracker = RecommendationTracker(engine.db_path)
-            tracker.record_signals(signals)
+            tracker.record_signals(report_result.top_n(DISPLAY_TOP_N))
 
             # 终端打印推荐报告
             report_gen = ReportGenerator(notifier)
@@ -701,15 +708,17 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     # （名单由股票列表顺序决定，输入集合一变就可能变）。
     # 因此先放宽候选池到「第 15 名及以上 + 所有同评级同分者」，
     # 等 batch_generate 算出置信度后，再用置信度作为并列时的二级排序键截断。
-    TOP_N = 15
+    # 展示/推送条数：与 push_feishu 的 DISPLAY_TOP_N 共用同一常量，避免两处 15 各自漂移
+    from sequoia_x.recommender.reporter import DISPLAY_TOP_N
+
     POOL_CAP = 200  # 防御：极端并列时不让候选池无限膨胀
     RATING_ORDER = {"strong_buy": 0, "buy": 1, "watch": 2, "attention": 3, "avoid": 4}
 
     def _production_key(r) -> tuple:
         return (RATING_ORDER.get(r.rating, 5), -r.total_score)
 
-    if len(all_results) >= TOP_N:
-        cut_key = _production_key(all_results[TOP_N - 1])
+    if len(all_results) >= DISPLAY_TOP_N:
+        cut_key = _production_key(all_results[DISPLAY_TOP_N - 1])
         candidates = [r for r in all_results if _production_key(r) <= cut_key][:POOL_CAP]
     else:
         candidates = list(all_results)
@@ -810,13 +819,18 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                 )
                 signals.append(sig)
 
-        # 最终名单：先按 (评级类别, 总分)，并列时再按置信度降序，取前 TOP_N。
+        # 最终名单：先按 (评级类别, 总分)，并列时再按置信度降序，取前 DISPLAY_TOP_N。
         # batch_generate 只按置信度排过序，这里把评级维度补回来，
         # 否则同分股票的顺序会由置信度而不是评级决定。
         pool_key = {r.symbol: _production_key(r) for r in candidates}
         signals.sort(key=lambda s: (pool_key.get(s.symbol, (9, 0.0)), -s.confidence))
-        signals = signals[:TOP_N]
+        signals = signals[:DISPLAY_TOP_N]
         logger.info(f"推送名单 {len(signals)} 只（排序：评级 → 总分 → 置信度）")
+
+        # 记录推荐到数据库：与飞书推送的名单保持一致，
+        # 否则 --review 的命中率统计没有数据源（--rating 是生产实际跑的路径）
+        from sequoia_x.tracker import RecommendationTracker
+        RecommendationTracker(engine.db_path).record_signals(signals)
 
         # 评级分布统计
         rating_dist = {"strong_buy": 0, "buy": 0, "watch": 0, "attention": 0, "avoid": 0}

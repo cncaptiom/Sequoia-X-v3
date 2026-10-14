@@ -106,13 +106,24 @@ macdRsi        0.00   横截面 IC 为负，默认关闭
 
 > 依据：2024-01 ~ 2026-08 全市场（5206只 / 584个交易日）横截面 IC 验证 —— 动量/趋势类 IC 全负，均值回归类是唯一稳定正超额来源，故 **reversal 主导**。
 
-#### 动态权重：市场状态 + IR + IC 衰减
+#### 动态权重：只由市场状态决定
 
-策略权重在扫描前会被三层机制动态改写（`rating/engine.py`）：
+策略权重在扫描前由 **`apply_regime()`** 按当日 regime 给策略类别分配权重（见下表），这是生产环境**唯一**的权重来源。
 
-1. **市场状态偏向** `apply_regime()` — 按当日 regime 给策略类别分配权重（见下表）
-2. **IR 加权** `apply_ir_weights()` — 用 ICTracker 的 60日/20日 IR，IR≤0 的策略权重归零，正 IR 策略按比例分配（不足3个正 IR 时保留市场状态权重，避免负 IC 策略被等权恢复）
-3. **IC 衰减** `_apply_ic_decay_weights()` — 近期 IC 衰减的策略本轮即降权
+> **为什么不再用 IC/IR 调权（2026-10-14 停用）**
+>
+> 原实现还有两层 IC 驱动的调权：`apply_ir_weights()`（IR ≤ 0 的策略权重直接清零）与 `_apply_ic_decay_weights()`（IC 衰减策略打折）。停用原因：
+>
+> - 它让权重由**噪声 IC 的符号**决定。光是给 IC 历史去重，9 个策略里就有 3 个的归零判定翻转——`turtleTrade` 的 IR 去重后只有 **+0.0033**、`kdj` +0.098，全落在 ±0.2 内
+> - 样本只有约 42 个交易日（5 日序列）/ 35 个（20 日序列），且**全部落在同一个市场状态（熊市）**，无法外推到别的状态
+> - 用 Newey-West 校正重叠窗口后 θ = 2 × SE(IR) ≈ 0.28~0.80，只有 `meanReversion` 勉强过关；换成 Harvey-Liu-Zhu 的多重检验门槛（k = 3）则一个都不剩
+> - 而 regime 权重表建立在 2024-01 ~ 2026-08 共 584 个交易日、5206 只股票的验证之上，样本量高一个数量级
+>
+> 两个方法保留在代码里供诊断脚本调用，但**不在生产路径上**。
+>
+> **重新启用 IC 调权的预注册条件**（完整规则写在 `rating/engine.py::apply_ir_weights` 的文档字符串里）：等**每个市场状态**下的**独立** IC 窗口都 ≥ 20 个时，才按预先定死的规则启用——按 `lookforward` 分开算 IR、Newey-West（L = h − 1）算 SE、θ = 3 × SE(IR)、`g(IR)` 形状固定。**不要到时候看着结果挑参数。**
+>
+> 诊断工具：`show_ic_ir_significance.py`（重叠校正后的 SE 与 θ）、`show_ic_ir.py`（去重前后的归零判定对照）。
 
 ### 市场状态识别
 
@@ -313,7 +324,7 @@ python main.py --install-schedule
 
 | 命令 | 功能 |
 |------|------|
-| `python main.py` | 日常模式：增量更新 + 6策略选股 + 推送 |
+| `python main.py` | 日常模式（**备用回退路径**，生产实际跑的是 `--rating`）：增量更新 + 6策略选股 + 推送 |
 | `python main.py --rating` | 评级模式：全市场9策略评分 + 前15名操作建议 |
 | `python main.py --backfill` | 串行回填（baostock） |
 | `python main.py --parallel-backfill` | 并行回填（baostock，8进程） |
@@ -338,7 +349,8 @@ python main.py --install-schedule
 | `run_rec_eval.py` | **历史重建**当前系统推荐：用当前评分配置回放历史每日 Top15，算未来 5/10/20 日收益、命中率、相对全A等权与指数超额，分市场状态切分 |
 | `run_rec_realcheck.py` | **真实快照**测评：对 `output/rating_result_*.json` 按生产口径重建 Top15，是"真实发生了什么"的视图（含当时实盘权重/财务因子/IR覆盖） |
 | `run_factor_validation.py` | 全量因子预测力验证：各因子对 5/10/20 日未来收益的 IC、五分位收益、信号触发后收益 |
-| `run_weight_validation.py` | 权重修正验证：用真实策略 IC 对比新旧权重的组合预测力 |
+| `run_weight_validation.py` | 权重修正验证：用真实策略 IC 对比生产权重（只由 regime 决定）与静态默认权重的组合预测力 |
+| `run_d5_weights_ab.py` | 权重口径对照：在**同一份评级快照内**反算新旧权重下的评分（不做跨运行比对，两次全市场扫描的输入数据会变）。`--smoke` 做不联网自检 |
 | `run_strategy_backtest.py` / `run_multi_backtest.py` / `run_consensus_backtest.py` | 单策略 / 多策略 / 融合评分回测 |
 | `run_grid_search.py` | 参数网格搜索 |
 
@@ -436,7 +448,7 @@ SQLite ──→ DataValidator ──→ 6策略并行选股
     │                           │
     │                   市场状态检测(RegimeDetector)
     │                           │
-    │                   9策略评级(REGIME_BIAS加权 → IR → IC衰减)
+    │                   9策略评级(权重只由市场状态 REGIME_BIAS 决定)
     │                           │
     │                    SignalGenerator信号
     │                           │

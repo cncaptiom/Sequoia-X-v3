@@ -1,4 +1,4 @@
-"""信号质量监控模块：IC追踪、信号衰减检测、权重自动调整。
+"""信号质量监控模块：IC追踪、信号衰减检测。
 
 IC = Information Coefficient = Spearman 秩相关系数（策略评分与未来收益之间）。
 
@@ -6,8 +6,9 @@ IC = Information Coefficient = Spearman 秩相关系数（策略评分与未来�
   1. 每日评分后，记录所有股票的各策略评分
   2. N 日后，计算每只股票 N 日收益率
   3. 对每个策略，计算评分与收益率的 Spearman 秩相关 → 当日 IC
-  4. 维护 IC 时间序列，检测持续衰减（连续 20 日 IC < 0）
-  5. 根据 IC 历史自动调整策略权重
+  4. 维护 IC 时间序列，检测持续衰减（同一前瞻期内连续 20 日 IC < 0）
+  5. 报告信号质量（`get_summary` / `print_summary`）；`adjust_weights` 保留但
+     **不在生产路径上**——权重只由市场状态决定，理由见 rating/engine.py。
 """
 
 import json
@@ -70,12 +71,22 @@ class ICTracker:
     STRATEGIES = ["maVolume", "turtleTrade", "meanReversion", "volumePrice",
                   "atrChannel", "macdRsi", "maCross", "kdj", "fundamental"]
 
+    # 窗口统计（last-20 / last-60 条）所依据的前瞻期。
+    # 5 日与 20 日 IC 量纲不同，混进同一个序列会把组间方差算进 ic_std，
+    # 使 |IR| 被系统性压小、符号还可能翻转（实测 turtleTrade 拆分后
+    # +0.096 / +0.121，混编后 −0.070）。任何窗口统计都必须先按期限拆开。
+    PRIMARY_LOOKFORWARD = 20
+
     def __init__(self, history_path: str = "output/ic_history.json"):
         self.history_path = history_path
         # strategy -> list of {date, ic, p_value, sample_size, lookforward}
         self.history: dict[str, list[dict]] = {s: [] for s in self.STRATEGIES}
         # 待评估的评分快照: {date: {symbol: {strategy: score}}}
         self._pending: dict[str, dict[str, dict[str, float]]] = {}
+        # 已评估记录: {date: {lookforward: True}}。**必须持久化**——
+        # 否则每个尚未完成的快照会在每次运行时被重新评估，向 history 重复追加
+        # 同一天同一 lookforward 的 IC 条目（实测同一日期最多重复 30 次）。
+        self._eval_record: dict[str, dict[int, bool]] = {}
         self._load()
 
     def _load(self):
@@ -87,6 +98,11 @@ class ICTracker:
             self.history = {s: data.get("history", {}).get(s, [])
                             for s in self.STRATEGIES}
             self._pending = data.get("pending", {})
+            # lookforward 在 JSON 里是字符串键，读回时转回 int
+            self._eval_record = {
+                d: {int(k): bool(v) for k, v in m.items()}
+                for d, m in (data.get("eval_record") or {}).items()
+            }
         except Exception:
             pass
 
@@ -97,6 +113,7 @@ class ICTracker:
             json.dump({
                 "history": self.history,
                 "pending": self._pending,
+                "eval_record": self._eval_record,
             }, f, ensure_ascii=False, indent=2)
 
     # ── 评分记录 ──
@@ -170,6 +187,13 @@ class ICTracker:
 
     NEEDED_PERIODS = [5, 20]  # 需要计算的 lookforward 天数
 
+    def _maybe_cleanup(self, d_str: str) -> None:
+        """NEEDED_PERIODS 全部评估完成后移除该快照。"""
+        rec = self._eval_record.get(d_str)
+        if rec and all(rec.get(f, False) for f in self.NEEDED_PERIODS):
+            self._pending.pop(d_str, None)
+            self._eval_record.pop(d_str, None)
+
     def eval_forward_returns(self, engine,
                              lookforward_days: int = 5,
                              batch_size: int = 200):
@@ -187,11 +211,8 @@ class ICTracker:
         from sequoia_x.core.logger import get_logger
         log = get_logger("ICTracker")
 
-        # 已评估记录: {date_str: {lookforward: True}}
-        evaluated: dict[str, dict[int, bool]] = {}
-        self._eval_record = getattr(self, "_eval_record", evaluated)
-        if not hasattr(self, "_eval_record") or self._eval_record is None:
-            self._eval_record = {}
+        # 注意：`self._eval_record` 由 __init__ 初始化、_load 从磁盘恢复，
+        # 这里**不能**重置它——重置会让每个未完成快照每次运行都被重算并重复追加。
 
         # 确定哪些 pending 快照可评估
         evaluable = []
@@ -237,6 +258,12 @@ class ICTracker:
             try:
                 d_idx = trade_dates.index(d_str)
             except ValueError:
+                # d_str 不在交易日序列里 —— 周末/节假日手工运行产生的快照，
+                # 永远无法评估。必须标记为已处理，否则它会永久卡在 pending 里、
+                # 每次运行都被重算一遍（这正是原先快照卡死的原因）。
+                self._eval_record.setdefault(d_str, {})[lookforward_days] = True
+                self._maybe_cleanup(d_str)
+                log.info(f"IC跳过 [{d_str}]：非交易日，已清理待评估快照")
                 continue
             fwd_idx = d_idx + lookforward_days
             if fwd_idx >= len(trade_dates):
@@ -312,33 +339,42 @@ class ICTracker:
 
             # 标记此 lookforward 已计算
             self._eval_record[d_str][lookforward_days] = True
-
-            # 所有 NEEDED_PERIODS 都算完了才移除快照
-            all_done = all(
-                self._eval_record[d_str].get(f, False)
-                for f in self.NEEDED_PERIODS
-            )
-            if all_done:
-                self._pending.pop(d_str, None)
-                self._eval_record.pop(d_str, None)
+            self._maybe_cleanup(d_str)
 
             log.info(f"IC计算完成 [{d_str}] lookforward={lookforward_days}d")
 
         self.save()
 
+    # ── IC 序列 ──
+
+    def _series(self, strategy: str, lookforward: int) -> list[dict]:
+        """某策略在指定前瞻期上的 IC 序列，按日期排序、同日重复只保留最后一条。
+
+        绝不跨期限合并——见 PRIMARY_LOOKFORWARD 的注释。
+        """
+        by_date: dict[str, dict] = {}
+        for e in self.history.get(strategy, []):
+            if int(e.get("lookforward", 0)) != lookforward:
+                continue
+            by_date[e.get("date", "")] = e
+        return [by_date[d] for d in sorted(by_date)]
+
     # ── 衰减检测 ──
 
     def detect_decay(self, strategy: str,
+                     lookforward: int = PRIMARY_LOOKFORWARD,
                      threshold: float = 0.0,
                      consecutive_days: int = 20) -> tuple[bool, int]:
-        """检测策略信号是否持续衰减（连续 N 天 IC 低于阈值）。
+        """检测策略信号是否持续衰减（连续 N 个交易日 IC 低于阈值）。
+
+        只在一个期限的序列上数「连续」——此前是在混编序列上数【条目】，而每个
+        日期贡献两条（5 日 + 20 日），等于把「连续 20 日」缩成了约 10 日。
 
         Returns:
             (是否衰减, 连续异常天数)
         """
-        entries = self.history.get(strategy, [])
         neg_run = 0
-        for entry in reversed(entries):
+        for entry in reversed(self._series(strategy, lookforward)):
             if entry.get("ic", 0) < threshold:
                 neg_run += 1
             else:
@@ -369,37 +405,46 @@ class ICTracker:
 
     # ── 报告 ──
 
-    def get_summary(self) -> dict:
-        """生成信号质量摘要报告。"""
+    def get_summary(self, lookforward: int = PRIMARY_LOOKFORWARD) -> dict:
+        """生成信号质量摘要报告，只在单一前瞻期内统计（不跨期限混算）。
+
+        Args:
+            lookforward: 窗口所依据的前瞻期，默认 20 日（与评级/回测口径对齐）。
+
+        Returns:
+            {策略: {lookforward, avg_ic_20d, avg_ic_60d, ir_20d, ir_60d,
+                    ic_positive_ratio, ic_significant_ratio, ir_status,
+                    latest_spread, neg_consecutive, decayed, samples}}
+        """
         summary = {}
         for s in self.STRATEGIES:
-            entries = self.history.get(s, [])
-            if not entries:
+            series = self._series(s, lookforward)
+            if not series:
                 continue
-            recent = entries[-min(len(entries), 20):]
-            avg_ic = float(np.mean([e["ic"] for e in recent]))
-            ic_std = float(np.std([e["ic"] for e in recent])) if len(recent) > 1 else 0
+            recent = series[-20:]
+            ic_vals = [e["ic"] for e in recent]
+            avg_ic = float(np.mean(ic_vals))
+            ic_std = float(np.std(ic_vals)) if len(ic_vals) > 1 else 0.0
 
-            entries_all = entries
-            n_all = len(entries_all)
-            avg_60d = float(np.mean([e["ic"] for e in entries_all[-60:]])) if n_all >= 60 else avg_ic
-            ic_std_60d = float(np.std([e["ic"] for e in entries_all[-60:]])) if n_all >= 60 else ic_std
+            has_60 = len(series) >= 60
+            tail = series[-60:] if has_60 else recent
+            avg_60d = float(np.mean([e["ic"] for e in tail])) if has_60 else avg_ic
+            ic_std_60d = float(np.std([e["ic"] for e in tail])) if has_60 and len(tail) > 1 else ic_std
             ic_std_60d = ic_std_60d if ic_std_60d > 1e-10 else 0.0
 
             ir_20 = avg_ic / ic_std if ic_std > 1e-10 else 0.0
             ir_60 = avg_60d / ic_std_60d if ic_std_60d > 1e-10 else 0.0
             latest_spread = recent[-1].get("spread_return", 0) if recent else 0
-            is_decayed, neg_run = self.detect_decay(s)
+            is_decayed, neg_run = self.detect_decay(s, lookforward)
 
             # IC 正比例
-            ic_pos = sum(1 for e in recent if e.get("ic", 0) > 0)
-            ic_pos_ratio = ic_pos / len(recent) if recent else 0.0
+            ic_pos_ratio = sum(1 for e in recent if e.get("ic", 0) > 0) / len(recent)
 
             # IC 显著性：p < 0.05 的比例
-            ic_sig = sum(1 for e in recent if e.get("p_value", 1.0) < 0.05)
-            ic_sig_ratio = ic_sig / len(recent) if recent else 0.0
+            ic_sig_ratio = sum(1 for e in recent if e.get("p_value", 1.0) < 0.05) / len(recent)
 
-            # IR 状态判定
+            # IR 状态判定。口径为 per-observation（未年化），年化因子 √(252/前瞻期)；
+            # 这里的 1.0/0.5 阈值只在展示层使用，不驱动任何权重决策。
             if ir_20 >= 1.0:
                 ir_status = "优秀"
             elif ir_20 >= 0.5:
@@ -410,6 +455,7 @@ class ICTracker:
                 ir_status = "差"
 
             summary[s] = {
+                "lookforward": lookforward,
                 "avg_ic_20d": round(avg_ic, 4),
                 "avg_ic_60d": round(avg_60d, 4),
                 "ir_20d": round(ir_20, 4),
@@ -420,32 +466,36 @@ class ICTracker:
                 "latest_spread": round(latest_spread, 4),
                 "neg_consecutive": neg_run,
                 "decayed": is_decayed,
-                "samples": n_all,
+                "samples": len(series),
             }
         return summary
 
     def print_summary(self):
-        """打印信号质量报告到控制台。"""
-        summary = self.get_summary()
-        if not summary:
-            print("无 IC 数据")
-            return
-        print(f"\n{'='*110}")
-        print(f"  信号质量报告 (IC追踪) │ IC正比=IC>0比例 │ IR状态: 优秀≥1.0 | 合格≥0.5 | 弱≥0 | 差<0")
-        print(f"{'='*110}")
-        print(f"{'策略':<18} {'IC-20d':<9} {'IC-60d':<9} {'IR-20d':<9} {'IR-60d':<9}"
-              f" {'IC正比':<8} {'p<.05':<8} {'IR状态':<6} {'价差':<7} {'衰减':<6}")
-        print(f"{'-'*110}")
-        for s in self.STRATEGIES:
-            info = summary.get(s)
-            if not info:
+        """打印信号质量报告到控制台（按前瞻期分块，5 日与 20 日不混算）。"""
+        horizons = sorted({int(e.get("lookforward", 0))
+                           for entries in self.history.values() for e in entries} - {0})
+        printed = False
+        for lf in horizons:
+            summary = self.get_summary(lf)
+            if not summary:
                 continue
-            ir_st = info["ir_status"]
-            decay_mark = "[衰减]" if info["decayed"] else "[正常]"
-            # IR状态着色提示
-            ir_tag = ir_st
-            print(f"{s:<18} {info['avg_ic_20d']:<+9.4f} {info['avg_ic_60d']:<+9.4f} "
-                  f"{info['ir_20d']:<+9.4f} {info['ir_60d']:<+9.4f} "
-                  f"{info['ic_positive_ratio']:<8.2%} {info['ic_significant_ratio']:<8.2%} "
-                  f"{ir_tag:<6} {info['latest_spread']:<+7.4f} {decay_mark:<6}")
-        print(f"{'='*110}")
+            printed = True
+            print(f"\n{'='*110}")
+            print(f"  信号质量报告 (IC追踪) │ 前瞻期={lf}日 │ IC正比=IC>0比例 │ "
+                  f"IR状态: 优秀≥1.0 | 合格≥0.5 | 弱≥0 | 差<0")
+            print(f"{'='*110}")
+            print(f"{'策略':<18} {'IC-20d':<9} {'IC-60d':<9} {'IR-20d':<9} {'IR-60d':<9}"
+                  f" {'IC正比':<8} {'p<.05':<8} {'IR状态':<6} {'价差':<7} {'衰减':<6}")
+            print(f"{'-'*110}")
+            for s in self.STRATEGIES:
+                info = summary.get(s)
+                if not info:
+                    continue
+                decay_mark = "[衰减]" if info["decayed"] else "[正常]"
+                print(f"{s:<18} {info['avg_ic_20d']:<+9.4f} {info['avg_ic_60d']:<+9.4f} "
+                      f"{info['ir_20d']:<+9.4f} {info['ir_60d']:<+9.4f} "
+                      f"{info['ic_positive_ratio']:<8.2%} {info['ic_significant_ratio']:<8.2%} "
+                      f"{info['ir_status']:<6} {info['latest_spread']:<+7.4f} {decay_mark:<6}")
+            print(f"{'='*110}")
+        if not printed:
+            print("无 IC 数据")

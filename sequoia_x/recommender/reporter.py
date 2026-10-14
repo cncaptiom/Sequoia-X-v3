@@ -9,6 +9,10 @@ from sequoia_x.notify.feishu import FeishuNotifier
 
 logger = get_logger(__name__)
 
+# 展示口径：飞书卡片展示的条数。
+# 追踪库写入的条数必须与之一致，否则「命中率」统计的分母会和用户看到的名单不符。
+DISPLAY_TOP_N = 15
+
 
 class ReportGenerator:
     """推荐报告生成器，支持终端打印和飞书推送。"""
@@ -65,7 +69,7 @@ class ReportGenerator:
             logger.warning("未配置飞书通知器，跳过推送")
             return
 
-        top = result.top_n(15)
+        top = result.top_n(DISPLAY_TOP_N)
         if not top:
             # 无推荐时仍然推送简版报告
             logger.info("无推荐信号，推送空报告")

@@ -78,15 +78,18 @@ class RecommendationTracker:
             conn.commit()
 
     def record_signals(self, signals: list[TradeSignal], date_str: Optional[str] = None):
-        """记录推荐信号到数据库（只记录置信度 >= 0.5 的信号）。"""
+        """记录推荐信号到数据库。
+
+        本方法不做任何筛选：调用方应传入**实际展示给用户的那批**信号。
+        原先这里硬编码「confidence < 0.5 就跳过」，导致推送名单里低置信度的股票
+        （实测占 40%）从未进入统计，而 get_stats() 的分母并不标注这一点。
+        """
         if not signals:
             return 0
         date_str = date_str or date.today().strftime("%Y-%m-%d")
         count = 0
         with sqlite3.connect(self.db_path) as conn:
             for sig in signals:
-                if sig.confidence < 0.5:
-                    continue
                 conn.execute(
                     """INSERT INTO recommendations 
                     (symbol, name, date_recorded, strategies, entry_low, entry_high,

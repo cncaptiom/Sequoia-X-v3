@@ -147,11 +147,30 @@ class RatingConfig:
                     object.__setattr__(self, attr, per_strategy_weight)
 
     def apply_ir_weights(self, ir_summary: dict[str, dict]) -> None:
-        """根据 ICTracker 的 IR 数据调整策略权重。
+        """【已退出生产路径】按 ICTracker 的 IR 调整策略权重——仅供诊断脚本调用。
 
-        IR 越高权重越大，IR<=0 的策略权重归零（不参与评分）。
-        所有正 IR 策略按比例分配权重，总和为 1.0。
-        如果只有不到3个策略有正 IR，说明 IR 数据不足，回退到等权。
+        原逻辑：IR 越高权重越大，IR <= 0 的策略权重直接清零，正 IR 策略按比例
+        分配权重，不足 3 个正 IR 则保留 apply_regime 设置的权重。
+
+        2026-10-14 停用（D5）。原因是它让权重由【噪声 IC 的符号】决定：
+          · 光是给 IC 历史去重，9 个策略里就有 3 个的归零判定翻转
+            （fundamental 保留→归零，kdj / turtleTrade 归零→保留）
+          · 去重后 turtleTrade 的 IR 只有 +0.0033、kdj +0.098，全落在 ±0.2 内
+          · 样本只有约 42 个交易日（5 日序列）/ 35 个（20 日序列），且全部落在
+            同一个市场状态（熊市），无法外推到别的状态
+          · 用 Newey-West 校正重叠窗口后 θ = 2·SE(IR) ≈ 0.28~0.80，只有
+            meanReversion 勉强过关；换成 Harvey-Liu-Zhu 的多重检验门槛（k=3）
+            则一个都不剩
+
+        启用条件（预注册，不要改）：等每个市场状态下的【独立】IC 窗口都 ≥ 20 个时，
+        按下列规则重写本方法，不要临时按当时的结果挑参数——
+            SE 用 Newey-West，L = h − 1（重叠窗口，Hansen-Hodrick / Newey-West）
+            按 lookforward 分开算 IR 与 SE，绝不跨期限合并（见 signal/quality.py）
+            θ = k × SE(IR)，k = 3（Harvey-Liu-Zhu 多重检验门槛）
+            g(IR) = 1            若 |IR| < θ     → 保留 apply_regime 的权重
+                  = min(IR/θ, 2) 若 IR ≥ +θ     → 上调，上限 2 倍
+                  = 0            若 IR ≤ −θ     → 清零
+            w = w_regime × g，最后统一归一化
 
         Args:
             ir_summary: ICTracker.get_summary() 返回的摘要
@@ -500,9 +519,9 @@ class RatingEngine:
         return {k: v / total for k, v in filtered.items()}
 
     def _apply_ic_decay_weights(self, ic_tracker) -> None:
-        """IC 衰减降权：检测到 IC 衰减的策略权重打折后重新归一化。
+        """【已退出生产路径】IC 衰减降权，理由同 apply_ir_weights。
 
-        在扫描前调用（与 apply_ir_weights 互补），确保衰减策略本轮即被降权。
+        它建立在同一份 2 个月、单一市场状态的 IC 历史上，因此同样不再驱动权重。
         """
         try:
             base = self._get_normalized_weights()
@@ -537,7 +556,7 @@ class RatingEngine:
         """加权正交化合成：返回 (total_score, 类内均分后的每策略分, 类别均分)。
 
         类别权重 = 该类【启用且权重>0】的策略的配置权重之和（归一化），
-        由 apply_ir_weights / apply_regime / apply_equal_weights 改写 config.weight_* 驱动；
+        由 apply_regime（生产唯一来源）/ apply_equal_weights 改写 config.weight_* 驱动；
         同类内取平均（正交化），权重为 0 的策略不参与评分。
         """
         cat_weights: dict[str, float] = {}
@@ -853,25 +872,8 @@ class RatingEngine:
     ) -> list[AnalysisResult]:
         all_results: list[AnalysisResult] = []
 
-        # 根据 IC Tracker 的 IR 数据调整策略权重
-        if ic_tracker is not None:
-            ir_summary = ic_tracker.get_summary()
-            if ir_summary:
-                old_weights = {
-                    k: getattr(self.config, attr)
-                    for k, attr in self.config.WEIGHT_ATTRS.items()
-                }
-                self.config.apply_ir_weights(ir_summary)
-                # IC 衰减降权（与 IR 加权互补）：检测到衰减的策略本轮即降权
-                self._apply_ic_decay_weights(ic_tracker)
-                new_weights = {
-                    k: getattr(self.config, attr)
-                    for k, attr in self.config.WEIGHT_ATTRS.items()
-                }
-                if old_weights != new_weights:
-                    logger.info("IR 加权策略权重: " + ", ".join(
-                        f"{k}={v:.3f}" for k, v in sorted(new_weights.items())
-                    ))
+        # 策略权重在进入本函数前已由 apply_regime（市场状态）定好。
+        # 此处不再用 IC/IR 调权——理由见 apply_ir_weights 的注释。
 
         failed = 0
         for symbol in symbols:
