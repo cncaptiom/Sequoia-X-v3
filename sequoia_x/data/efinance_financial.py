@@ -5,6 +5,10 @@
 
 定位：fundamental 策略的财务数据源之一。调用方需在 efinance 不可用时
 回退到 baostock。非官方接口，接口字段可能变更，已做容错。
+
+**报告期只向前推进**：一律取「抓取成功且披露数达标」的**最新**报告期，且绝不比已缓存的
+报告期更旧——否则一次网络抖动就会把财务数据悄悄退回旧一期，同一天两次 `--rating`
+可能拿到不同的 fundamental 输入（该策略权重 0.32）。
 """
 
 import json
@@ -69,12 +73,14 @@ def _num(v) -> float | None:
         return None
 
 
-def _fetch_performance():
+def _fetch_performance(floor_report_date: str | None = None):
     """抓取全市场业绩表，返回 (DataFrame, 报告期)。
 
-    efinance 默认取“最新报告期”，但该报告期刚开始时还没有公司披露，接口返回
-    “返回数据为空”（result 为 None，efinance 内部会抛 TypeError）。此时逐个
-    回退到更早的报告期取数。
+    按报告期从新到旧尝试，取第一个「抓取成功且披露数 ≥ _MIN_SYMBOLS_PER_REPORT」的期。
+
+    floor_report_date 用来防止**退化**：一旦要用的报告期比它还旧就直接放弃返回，
+    交给调用方保留原缓存。否则一次网络抖动（如 2026-06-30 抓取失败）就会把财务数据
+    从新一期悄悄退回旧一期，同一天两次运行拿到不同的 fundamental 输入。
     """
     import efinance as ef
 
@@ -86,6 +92,12 @@ def _fetch_performance():
         candidates = [None]
 
     for report_date in candidates:
+        if floor_report_date and report_date and report_date < floor_report_date:
+            logger.warning(
+                f"可用的报告期只剩 {report_date}，比缓存中的 {floor_report_date} 更旧，"
+                f"保留缓存不再回退"
+            )
+            return None, None
         try:
             df = ef.stock.get_all_company_performance(date=report_date)
         except Exception as exc:
@@ -96,7 +108,7 @@ def _fetch_performance():
         if len(df) < _MIN_SYMBOLS_PER_REPORT:
             logger.info(f"报告期 {report_date} 仅 {len(df)} 只已披露，改用上一期")
             continue
-        if report_date != candidates[0]:
+        if candidates and report_date != candidates[0]:
             logger.info(
                 f"最新报告期 {candidates[0]} 尚无披露，efinance 财务数据改用 "
                 f"{report_date}（{len(df)} 只）"
@@ -128,13 +140,15 @@ def load_financial_all(force: bool = False) -> dict[str, dict]:
         _AVAILABLE = False
         return {}
 
-    df, report_date = _fetch_performance()
+    cached_report = (cached or {}).get("report_date")
+    df, report_date = _fetch_performance(floor_report_date=cached_report)
     if df is None:
-        # 只在 efinance 不可用时永久禁用；单次网络/接口失败下次调用仍会重试
+        # 两种情况都保留缓存：拉取全部失败；或唯一可用的报告期比缓存更旧（防退化）。
+        # 只在 efinance 不可用时永久禁用；单次网络/接口失败下次调用仍会重试。
         if cached and cached.get("data"):
             logger.warning(
-                f"efinance 全市场业绩拉取失败，回退本地缓存"
-                f"（抓取于 {cached.get('fetch_date')}，报告期 {cached.get('report_date')}，"
+                f"未取得不早于缓存报告期（{cached_report}）的数据，保留本地财务缓存"
+                f"（抓取于 {cached.get('fetch_date')}，报告期 {cached_report}，"
                 f"{len(cached['data'])} 只）"
             )
             return cached["data"]
