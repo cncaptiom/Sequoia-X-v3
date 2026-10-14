@@ -350,7 +350,8 @@ python main.py --install-schedule
 | `run_rec_realcheck.py` | **真实快照**测评：对 `output/rating_result_*.json` 按生产口径重建 Top15，是"真实发生了什么"的视图（含当时实盘权重/财务因子/IR覆盖） |
 | `run_factor_validation.py` | 全量因子预测力验证：各因子对 5/10/20 日未来收益的 IC、五分位收益、信号触发后收益 |
 | `run_weight_validation.py` | 权重修正验证：用真实策略 IC 对比生产权重（只由 regime 决定）与静态默认权重的组合预测力 |
-| `run_d5_weights_ab.py` | 权重口径对照：在**同一份评级快照内**反算新旧权重下的评分（不做跨运行比对，两次全市场扫描的输入数据会变）。`--smoke` 做不联网自检 |
+| `run_d5_weights_ab.py` | 权重口径对照：在**同一份评级快照内**反算新旧权重下的评分（不做跨运行比对，历史快照的 code 不是生产的输入池）。`--smoke` 做不联网自检 |
+| `check_pool_parity.py` | 生产可复现性校验：用生产的输入池重扫一遍，对比最新快照的评级分布与 Top15（只读） |
 | `run_strategy_backtest.py` / `run_multi_backtest.py` / `run_consensus_backtest.py` | 单策略 / 多策略 / 融合评分回测 |
 | `run_grid_search.py` | 参数网格搜索 |
 

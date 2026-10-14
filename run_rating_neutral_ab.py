@@ -13,9 +13,12 @@
 因此差异只可能来自这一处行为。
 
 与生产对齐的做法：
-  - **股票池**取最近一次 `--rating` 的 `rating_result_*.json`（已过滤 ST），而不是本地全量
   - **权重**只来自 `apply_regime`（市场状态）——2026-10-14 起生产不再叠加 IR 加权与
     IC 衰减，见 CHANGELOG 第十节。`ic_tracker=None` 传给 `scan_market`，避免写库
+  - **股票池**用最近一次 `--rating` 的 `rating_result_*.json` 里的 code。**注意这不是生产的
+    输入池**：那是 `scan_market` 过滤后的结果（4993 只），生产实际喂进去的是
+    `get_local_symbols()` 去 ST 后的 5039 只。截面标准化的样本不同，所以本脚本的
+    **绝对数值不等于生产口径**；好在两臂共用同一个池、只比臂间差异，结论不受影响。
 
 只读：不推送飞书、不传 COS、不写库。但会做两次全市场评级扫描。
 用法: python run_rating_neutral_ab.py [--limit N]
