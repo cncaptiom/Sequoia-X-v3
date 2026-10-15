@@ -483,7 +483,7 @@ class RatingEngine:
         # 正交化后的评分用于输出（同类策略等值）
         output_strategy_scores = {k: round(v, 1) for k, v in ortho_scores.items()}
         # 定级与显示用同一个数（理由见 _cross_sectional_standardize）
-        stored_score = round(total_score, 1)
+        stored_score = round(total_score, 1) + 0.0   # +0.0 归一掉 -0.0
         rating = self._calculate_rating(trend_passed, stored_score)
 
         return AnalysisResult(
@@ -628,7 +628,9 @@ class RatingEngine:
             # 定级与显示必须用**同一个数**：先圆整存下，后面一律引用它。
             # 此前是「存 round(total,1)、按未圆整的 total 定级」，于是在阈值附近
             # 出现「显示 0.5 却判 attention」「显示 -0.0 却判 avoid」这类自相矛盾。
-            r.total_score = round(total, 1)
+            # 末尾的 +0.0 是归一掉 -0.0：round(-0.03, 1) 得到 -0.0，界面会显示
+            # 「总分 -0.0」，看着像 bug。
+            r.total_score = round(total, 1) + 0.0
             r.strategy_scores = {k: round(v, 1) for k, v in ortho.items()}
             r.per_strategy_scores = {k: round(v, 1) for k, v in std_scores.items()}
             r.category_scores = cat

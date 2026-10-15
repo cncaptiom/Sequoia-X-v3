@@ -27,7 +27,12 @@ from sequoia_x.rating.engine import RatingConfig
 
 DB_PATH = os.environ.get("DB_PATH", "data/sequoia_v2.db")
 HIST_START = "2024-01-01"
-BENCH = "000300"
+# 市场状态基准：**必须与生产一致**（main.py 三处都是 RegimeDetector.detect("000905")）。
+# 曾经用 000300 —— 两套基准在 668 个共同交易日里有 205 天（30.7%）的 regime 标签不同，
+# 于是本脚本算出的「分市场状态」结论与生产对不上。
+# （000905 曾在 2026-08-24 起出现 -99.9% 的脏数据，那是「被同号个股覆盖」的 bug，
+#  2026-10-11 已修，现在 671 条、无崩断。）
+BENCH = "000905"
 FWD = [5, 10, 20]
 MEMBER_KEYS = ["turtleTrade", "meanReversion", "atrChannel", "maCross", "kdj"]
 CATS = {
@@ -389,7 +394,7 @@ def main():
     report = {
         "generated_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
         "config": {
-            "bench": BENCH, "regime_note": f"{BENCH} 到 {eval_dates[-1]}；000905 尾段脏数据(08-24起 -99.9% 崩断)弃用",
+            "bench": BENCH, "regime_note": f"{BENCH} 到 {eval_dates[-1]}",
             "weights": "RatingConfig 默认 + 每日 REGIME_BIAS，剔除财务因子(fundamental=0)折算；未含 IR 自适应覆盖",
             "entry": "评分日收盘买入，N 交易日(自有bar)收盘卖出；未计成本/涨跌停/停牌不可买",
             "universe": "A股(6/0/3开头) 每评估日 ≥60根K线、近120根无>21%复权跳变、当日有成交",
