@@ -2,7 +2,9 @@
 chcp 65001 >nul
 title 股票分析APP - 启动
 
-cd /d D:\gupiao\gpfxapp
+:: 注意：此处以前写的是 D:\gupiao\gpfxapp —— 那是 2026-06 就废弃的旧副本
+:: （没有 services/pc_merge.dart，最后构建停在 2026-06-16）。照旧路径跑会构建到旧代码上。
+cd /d D:\gupiao\Sequoia-X-v3\gpfxapp
 
 :: 设置镜像和路径
 set FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn

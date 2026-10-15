@@ -958,3 +958,27 @@ H4 补上 `_run_rating` 的 `record_signals` 后，从 10-13 起才会按日累�
 
 **验证**：桩测三种情形——网络类错误码重试到成功（3 次调用）、正常错误码（无数据）
 只调 1 次不重试、始终失败时 3 次后返回。`py_compile` 通过。
+
+## 二十七、修正手机端构建脚本的过时路径（2026-10-15）
+
+`gpfxapp/run.bat:5` 与 `setup.bat:52` 里的 `cd /d D:\gupiao\gpfxapp` 指向的是
+**2026-06 就废弃的旧副本**（35 个 dart 文件、没有 `services/pc_merge.dart`、
+最后构建停在 2026-06-16）。活跃副本是仓库里的 `gpfxapp/`（最近构建 2026-08-30）。
+**照旧路径跑会构建到旧代码上**——本次改手机端时就踩到了这个坑。
+
+已改为 `D:\gupiao\Sequoia-X-v3\gpfxapp`，并在 `run.bat` 里留了注释说明原因。
+
+**构建命令**（2026-10-15 实测 72.7 秒成功，产出 `app-release.apk` 53.2MB）：
+
+```bash
+FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn \
+PUB_HOSTED_URL=https://pub.flutter-io.cn \
+JAVA_HOME="C:\Program Files\Android\Android Studio\jbr" \
+ANDROID_HOME="$LOCALAPPDATA/Android/Sdk" \
+ANDROID_SDK_ROOT="$LOCALAPPDATA/Android/Sdk" \
+flutter build apk --release
+```
+
+**怎么确认 APK 真的包含改动**：APK 内部时间戳被规范成 1981（可复现构建）、
+文件大小也可能不变（AOT 分段定长），这两项都看不出新旧 → **直接在
+`lib/arm64-v8a/libapp.so` 里搜字符串**（Dart 字符串在 AOT 快照里是 **UTF-16LE**）。

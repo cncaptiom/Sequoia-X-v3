@@ -49,7 +49,7 @@ echo ========================================
 echo.
 echo 请关闭此窗口，重新打开终端后执行:
 echo.
-echo   cd /d D:\gupiao\gpfxapp
+echo   cd /d D:\gupiao\Sequoia-X-v3\gpfxapp
 echo   flutter create . --project-name gpfxapp
 echo   flutter pub get
 echo   flutter run
