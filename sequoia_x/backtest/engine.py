@@ -34,10 +34,13 @@ class BacktestConfig:
     min_bars: int = 30                          # 最少需要的历史K线
     benchmark_symbol: str = "sh.000300"         # 基准：沪深300
     # 成交时点：
-    #   "same_close" = 信号当日收盘价成交（历史实现）。信号是拿当日收盘算出来的，
-    #                  当天就用同一个收盘价成交在实盘里做不到——见 H3 未来函数。
-    #   "next_open"  = 信号次日开盘价成交（可执行）。
-    fill_mode: str = "same_close"
+    #   "next_open"  = 信号次日开盘价成交（**默认**）。信号是拿当日收盘算出来的，
+    #                  次日开盘才可执行。
+    #   "same_close" = 信号当日收盘价成交（2026-10-15 之前的旧行为）。A股没有 MOC
+    #                  指令，当天以同一根K线的收盘价成交做不到——见 H3 未来函数。
+    # 实测（TurtleTrade / 全市场 / 近一年）：same_close 把年化虚高约 5.4pp、
+    # 回撤美化 5.2pp。比这更早的回测数字都带着这个偏差。
+    fill_mode: str = "next_open"
 
 
 # ── 交易记录 ──
