@@ -150,14 +150,20 @@ class CosUploader:
         self, top_picks: list[dict[str, Any]],
         rating_summary: dict[str, int],
         market_regime: str = "", suggested_exposure: float = 0.0,
+        strategy_bias: Optional[dict[str, Any]] = None,
     ) -> bool:
-        """上传每日组合摘要。"""
+        """上传每日组合摘要。
+
+        带上 `strategy_bias`（各类别的权重偏向），供手机端详情页的「不同策略分析」
+        显示权重——此前手机端自己硬编码了一份与 PC `REGIME_BIAS` 完全不同的表。
+        """
         data: dict[str, Any] = {
             **self._metadata(),
             "type": "portfolio_summary",
             "market_regime": market_regime,
             "suggested_exposure": suggested_exposure,
             "rating_summary": rating_summary,
+            "strategy_bias": strategy_bias or {},
             "top_picks": top_picks[:10],
         }
         return self._put_json("summary/today.json", data)
@@ -294,5 +300,5 @@ def upload_full_ratings(bucket, region, secret_id, secret_key, ratings, strategy
     return _make_uploader(bucket, region, secret_id, secret_key).upload_full_ratings(ratings, strategy_config, regime)
 
 
-def upload_portfolio_summary(bucket, region, secret_id, secret_key, top_picks, rating_summary, market_regime="", suggested_exposure=0.0):
-    return _make_uploader(bucket, region, secret_id, secret_key).upload_portfolio_summary(top_picks, rating_summary, market_regime, suggested_exposure)
+def upload_portfolio_summary(bucket, region, secret_id, secret_key, top_picks, rating_summary, market_regime="", suggested_exposure=0.0, strategy_bias=None):
+    return _make_uploader(bucket, region, secret_id, secret_key).upload_portfolio_summary(top_picks, rating_summary, market_regime, suggested_exposure, strategy_bias)

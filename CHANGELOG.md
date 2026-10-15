@@ -856,3 +856,41 @@ H4 补上 `_run_rating` 的 `record_signals` 后，从 10-13 起才会按日累�
 **遗留**：`_buildDecisionCard` 里建仓/关注/观望的分支仍在用 PC 阈值判本地分，
 这次只改了标签与配色（已在代码里标注）。②合并口径与 ⑥regimeWeights 未做——
 前者需要 PC 导出补 `signals` 字段，后者需要手机端新解析 `strategy_bias`。
+
+## 二十四、手机端 ⑤⑥ + 两处遗留（2026-10-15）
+
+### ⑤ 类别条的决策不再混用两个来源
+
+类别条的「积极/关注/观望」原本用 `avg`（PC 的类别 Z 分）+ `bullish/bearish`
+（手机端本地信号数）共同决定——分数来自 PC、信号来自本地，可互相矛盾。
+
+**不能「信号也换 PC」的原因**：PC 的 `AnalysisResult.signals` 是**没有类型的裸字符串**
+（`"趋势-均线多头排列"`、`"MaVolume-金叉: 量能不足"`），而手机端的 `Signal` 需要
+`bullish/bearish` 类型；且 PC 的评级导出里根本没有 `signals` 字段。要换得先在 PC 侧
+给 30 多处 `signals.append()` 补类型。
+
+**实际改法**：`_buildCatDetail` 按来源分流——PC 数据只按 `avg` 判，本地才用
+「`avg` + 信号数」，至少不再混用。新增 `AnalysisResult.isLocalEstimate` 作为来源标记
+（`mergePcData` 合并后置 false）。
+
+### ⑥ 删掉手机端自带的 regime 权重表，改从 PC 同步
+
+- **PC 侧**：`upload_portfolio_summary` 新增 `strategy_bias` 参数（`main.py` 传
+  `regime.strategy_bias`），写进**手机端已经会拉取**的 `summary/today.json`——
+  `regime/today.json` 手机端根本不拉，不能放那里
+- **手机端**：`PcPortfolioSummary` 新增 `strategyBias` 解析；`_buildCategoryStrip`
+  删掉硬编码的 `regimeWeights`（只有 3 类、数字与 PC 全不同、没有 fundamental），
+  改用 PC 的 `strategy_bias`。**PC 数据没到时不显示权重**，不拿近似值冒充
+
+### 两处遗留
+
+- `_buildDecisionCard` 的动作（建仓/关注/观望）仍用 PC 阈值算本地分——算法没动
+  （离线时仍有指导价值），但**动作文案加 `估算·` 前缀**标明来源
+- `strategy_config.dart` 的 `macdRsiEnabled` 默认值 `true` → `false`，与 PC
+  `RatingConfig.macd_rsi_enabled = False` 一致（构造函数默认值与 `fromJson` 兜底都改）
+
+**验证**：`dart analyze lib/` → **0 error / 0 warning**；`dart format` 对我改的 5 个
+文件无新增差异（另有两处**既有**旧漂移未动）。**未运行 App**——`flutter --version`
+需联网取 tags 而失败、也无可用设备，**交互与视觉需构建后确认**。
+
+**仍未做**：PC 侧给 `signals` 补类型（做完才能让详情页显示 PC 的原始信号文案）。

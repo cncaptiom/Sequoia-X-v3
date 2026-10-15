@@ -119,6 +119,13 @@ class PcPortfolioSummary {
   final Map<String, int> ratingSummary;
   final List<PcTopPick> topPicks;
 
+  /// 各类别的权重偏向（PC 的 `REGIME_BIAS`，键为 trend/momentum/reversal/fundamental）。
+  ///
+  /// 详情页「不同策略分析」用它显示权重。此前手机端自己硬编码了一份 `regimeWeights`
+  /// 表（只有 趋势/动量/反转、且数字与 PC 全部不同、没有 fundamental）——
+  /// 见 docs/mobile-datalayer-review-2026-10-15.md 第 5 条。
+  final Map<String, double> strategyBias;
+
   PcPortfolioSummary({
     required this.date,
     required this.generatedAt,
@@ -126,10 +133,12 @@ class PcPortfolioSummary {
     required this.suggestedExposure,
     required this.ratingSummary,
     required this.topPicks,
+    this.strategyBias = const {},
   });
 
   factory PcPortfolioSummary.fromJson(Map<String, dynamic> json) {
     final rawSummary = json['rating_summary'] as Map<String, dynamic>? ?? {};
+    final rawBias = json['strategy_bias'] as Map<String, dynamic>? ?? {};
     return PcPortfolioSummary(
       date: json['date'] as String? ?? '',
       generatedAt: json['generated_at'] as String? ?? '',
@@ -140,6 +149,8 @@ class PcPortfolioSummary {
         final n = v is num ? v.toInt() : int.tryParse(v?.toString() ?? '');
         return MapEntry(k, n ?? 0);
       }),
+      strategyBias: rawBias.map((k, v) =>
+          MapEntry(k, v is num ? v.toDouble() : double.tryParse('$v') ?? 0)),
       topPicks: (json['top_picks'] as List?)
               ?.map((e) => PcTopPick.fromJson(e as Map<String, dynamic>))
               .toList() ??

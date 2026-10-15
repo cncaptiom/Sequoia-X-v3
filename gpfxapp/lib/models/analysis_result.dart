@@ -32,6 +32,13 @@ class AnalysisResult {
   /// 分析时间
   final DateTime time;
 
+  /// 这份数据是**手机端离线估算**的，还是 PC 同步来的。
+  ///
+  /// 本地 totalScore 是「原始整数分 × 权重」的加权和，PC 是截面 Z 分，两者不是同一把
+  /// 尺子（见 docs/mobile-datalayer-review-2026-10-15.md 第 1 条），所以下游凡是按
+  /// PC 刻度做的判定都要先看这个标记。`mergePcData` 合并后置为 false。
+  final bool isLocalEstimate;
+
   AnalysisResult({
     required this.rating,
     required this.totalScore,
@@ -44,6 +51,7 @@ class AnalysisResult {
     this.buyRange,
     required this.signals,
     required this.time,
+    this.isLocalEstimate = true,
   });
 
   String get ratingLabel {

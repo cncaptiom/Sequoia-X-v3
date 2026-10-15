@@ -31,6 +31,8 @@ AnalysisResult mergePcData(AnalysisResult original, PcRatingResult pcRating) {
     buyRange: pcRating.buyRange,
     signals: original.signals,
     time: original.time,
+    // 分数/评级已经换成 PC 口径，下游按 PC 刻度做的判定要靠这个标记区分
+    isLocalEstimate: false,
   );
 }
 

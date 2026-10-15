@@ -269,6 +269,7 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
             top_picks, rs,
             regime_result.label if regime_result else "",
             regime_result.suggested_exposure if regime_result else 0.0,
+            regime_result.strategy_bias if regime_result else None,
         ):
             ok = False
 

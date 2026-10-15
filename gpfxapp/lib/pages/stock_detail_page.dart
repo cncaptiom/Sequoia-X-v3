@@ -213,7 +213,7 @@ class StockDetailPage extends StatelessWidget {
                           ? mergePcData(analysis, pcRating4)
                           : analysis;
                       return _buildCategoryStrip(overridden4,
-                          marketRegime: pcProvider.marketRegimeLabel);
+                          pcBias: pcProvider.summary?.strategyBias ?? const {});
                     },
                   ),
                 const SizedBox(height: 8),
@@ -535,6 +535,13 @@ class StockDetailPage extends StatelessWidget {
       }
     }
 
+    // 本地数据（PC 未同步）时，动作与下面的建议仍是用同一套 PC 阈值算出来的，
+    // 阈值本身并没有针对本地分标定——标注来源，避免用户把「离线估算的建仓」
+    // 当成 PC 的判断。
+    if (!hasPc) {
+      action = '估算·$action';
+    }
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(16),
@@ -760,7 +767,8 @@ class StockDetailPage extends StatelessWidget {
   // 三类策略概览（紧凑行）
   // ============================================
 
-  Widget _buildCategoryStrip(dynamic analysis, {String marketRegime = ''}) {
+  Widget _buildCategoryStrip(dynamic analysis,
+      {Map<String, double> pcBias = const {}}) {
     final categories = [
       {
         'name': '趋势',
@@ -785,20 +793,17 @@ class StockDetailPage extends StatelessWidget {
       },
     ];
 
-    // 市场状态 → 策略权重映射
-    const regimeWeights = {
-      '强牛': {'趋势': 0.43, '动量': 0.22, '反转': 0.35},
-      '弱牛': {'趋势': 0.15, '动量': 0.30, '反转': 0.55},
-      '震荡': {'趋势': 0.32, '动量': 0.30, '反转': 0.38},
-      '弱熊': {'趋势': 0.15, '动量': 0.35, '反转': 0.50},
-      '强熊': {'趋势': 0.05, '动量': 0.20, '反转': 0.75},
+    // 各类别的权重**直接来自 PC 的 REGIME_BIAS**（随 summary 同步下来）。
+    //
+    // 此前这里硬编码了一份 regimeWeights 表：只有趋势/动量/反转三类、没有 fundamental、
+    // 而且数字与 PC 的全部不同（如强熊 PC 是 trend 0.00 / reversal 0.68 / fundamental 0.32，
+    // 这里是 0.05 / 0.75）——见 docs/mobile-datalayer-review-2026-10-15.md 第 5 条。
+    // PC 数据没到时不显示权重，而不是拿一份近似值冒充。
+    final weights = <String, double>{
+      if (pcBias['trend'] != null) '趋势': pcBias['trend']!,
+      if (pcBias['momentum'] != null) '动量': pcBias['momentum']!,
+      if (pcBias['reversal'] != null) '反转': pcBias['reversal']!,
     };
-    final weights = regimeWeights.entries
-        .firstWhere(
-          (e) => marketRegime.contains(e.key),
-          orElse: () => MapEntry('', const {}),
-        )
-        .value;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(14),
@@ -855,10 +860,17 @@ class StockDetailPage extends StatelessWidget {
     Color ac;
     // 阈值对齐 PC 截面标准化评分尺度（PC strategy_scores 为标准化 Z 值，均值≈0）
     // 积极≥1.0 / 关注≥0.5 / 谨慎≤-0.5，与决策卡 S/A/B 阈值同量级
-    if (avg >= 1.0 && bullish >= 1) {
+    //
+    // ⚠️ 数据来源必须一致：PC 数据时 avg 是 PC 的 Z 分，而 signals 仍是手机端本地生成的，
+    // 两者来源/量纲不同，混进同一个判断会互相矛盾（见 mobile-datalayer-review 第 3、7 条）。
+    // 所以 PC 数据只按 avg 判，本地数据才用「avg + 信号数」。
+    // （PC 的 signals 是**没有类型的裸字符串**，且 PC 评级导出里根本没有这个字段，
+    //  换不过来——除非先在 PC 侧给信号补类型。）
+    final bool fromPc = !analysis.isLocalEstimate;
+    if (avg >= 1.0 && (fromPc || bullish >= 1)) {
       action = '积极';
       ac = AppTheme.signalBuy;
-    } else if (avg <= -0.5 && bearish >= 1) {
+    } else if (avg <= -0.5 && (fromPc || bearish >= 1)) {
       action = '谨慎';
       ac = AppTheme.downColor;
     } else if (avg >= 0.5) {

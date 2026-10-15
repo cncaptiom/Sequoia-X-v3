@@ -140,7 +140,10 @@ class StrategyConfig {
     this.atrChannelWindow = 20,
     this.atrExitScore = 0.2,
     this.atrMultiple = 2.0,
-    this.macdRsiEnabled = true,
+    // 与 PC `RatingConfig.macd_rsi_enabled` 保持一致（PC 侧注明「回测确认：IR 最差」）。
+    // 此前这里是 true——自定义过设置的用户本地会一直用 macdRsi 打分，而 PC 根本不算它。
+    // 见 docs/mobile-datalayer-review-2026-10-15.md 第 6 条。
+    this.macdRsiEnabled = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -217,7 +220,7 @@ class StrategyConfig {
         atrChannelWindow: json['atrChannelWindow'] as int? ?? 20,
         atrExitScore: (json['atrExitScore'] as num?)?.toDouble() ?? 0.2,
         atrMultiple: (json['atrMultiple'] as num?)?.toDouble() ?? 2.0,
-        macdRsiEnabled: json['macdRsiEnabled'] as bool? ?? true,
+        macdRsiEnabled: json['macdRsiEnabled'] as bool? ?? false,
         maCrossEnabled: json['maCrossEnabled'] as bool? ?? true,
         kdjEnabled: json['kdjEnabled'] as bool? ?? true,
         kdjKPeriod: json['kdjKPeriod'] as int? ?? 9,
