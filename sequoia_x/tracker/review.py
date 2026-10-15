@@ -1,5 +1,10 @@
 
-"""推荐追踪模块：记录每日推荐到 SQLite，7天后回溯检查命中率。"""
+"""推荐追踪模块：记录每日推荐到 SQLite，7 天后回溯检查命中率。
+
+回溯窗口是**固定的 7 个自然日**（`REVIEW_WINDOW_DAYS`）：一条推荐在
+[推荐日, 推荐日+7 天] 这段里评估，且要等这段走完才回溯。这样同一条推荐
+无论第 8 天还是第 50 天回溯，结论都一样。
+"""
 
 import sqlite3, json
 from datetime import date, timedelta
@@ -11,6 +16,9 @@ from sequoia_x.signal.models import TradeSignal, SignalResult
 from sequoia_x.utils.name_resolver import get_name_resolver
 
 logger = get_logger(__name__)
+
+# 回溯窗口（自然日）。改动它等于改动「命中率」的定义。
+REVIEW_WINDOW_DAYS = 7
 
 
 @dataclass
@@ -109,53 +117,73 @@ class RecommendationTracker:
         return count
 
     def review_pending(self, engine) -> list[dict]:
-        """回溯所有未检查且超过 7 天的推荐。"""
-        cutoff = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
-        rows = []
-        daily_max_ret: dict[str, float] = {}  # symbol -> max close
+        """回溯所有「已过回溯窗口、且尚未检查」的推荐，窗口固定 7 个自然日。"""
+        cutoff = (date.today() - timedelta(days=REVIEW_WINDOW_DAYS)).strftime("%Y-%m-%d")
+        results = []
         with sqlite3.connect(self.db_path) as conn:
             pending = conn.execute(
-                "SELECT id, symbol, entry_low, date_recorded FROM recommendations WHERE review_date IS NULL AND date_recorded <= ?",
+                "SELECT id, symbol, stop_loss, target_1, date_recorded"
+                " FROM recommendations WHERE review_date IS NULL AND date_recorded <= ?",
                 (cutoff,),
             ).fetchall()
             if not pending:
                 return []
 
             name_resolver = get_name_resolver()
-            results = []
-            for rec_id, symbol, entry_low, rec_date in pending:
+            for rec_id, symbol, stop_loss, target_1, rec_date in pending:
                 try:
                     df = engine.get_ohlcv(symbol)
                     if df.empty:
                         continue
-                    # 找出推荐日期之后的数据
-                    mask = df["date"] >= rec_date
-                    df_after = df[mask].copy()
+                    # 进场价 = 推荐日【次日开盘价】。推荐是拿推荐日收盘算出来的，
+                    # 用同一根 K 线的收盘价成交是前视——与回测 H3 同一条，量级还更大：
+                    # 实测把 7 日平均收益从 −0.18% 抬到 +10.41%，全部「优势」都来自它。
+                    after = df[df["date"] > rec_date]
+                    if after.empty:
+                        continue
+                    entry_price = float(after["open"].iloc[0])
+                    if entry_price <= 0:
+                        continue
+                    entry_date = str(after["date"].iloc[0])
+
+                    # 评估窗口：[进场日, 推荐日 + REVIEW_WINDOW_DAYS]。
+                    # 此前是 `df["date"] >= rec_date`——把推荐日之后【所有】历史都算进来，
+                    # 于是同一条推荐第 8 天和第 50 天回溯结论不同（实测回溯期跑到约 48 天）。
+                    end_date = (date.fromisoformat(rec_date)
+                                + timedelta(days=REVIEW_WINDOW_DAYS)).isoformat()
+                    df_after = df[(df["date"] >= entry_date) & (df["date"] <= end_date)]
                     if df_after.empty:
                         continue
                     closes = df_after["close"].values
-                    first_close = float(closes[0])
+                    highs = df_after["high"].values
+                    lows = df_after["low"].values
                     last_close = float(closes[-1])
 
-                    # 实际涨跌幅
-                    actual_return = (last_close - first_close) / first_close
+                    # 实际涨跌幅（窗口末对比进场价）
+                    actual_return = (last_close - entry_price) / entry_price
 
-                    # 期间最大涨幅/最大回撤
-                    max_close = float(max(closes))
-                    min_close = float(min(closes))
-                    max_return = (max_close - first_close) / first_close
-                    max_dd = (min_close - first_close) / first_close
+                    # 期间最大涨幅/最大回撤：用 high/low，与止损止盈同一套价格口径
+                    max_return = (float(max(highs)) - entry_price) / entry_price
+                    max_dd = (float(min(lows)) - entry_price) / entry_price
 
-                    # 是否触及止损/目标
-                    stop_price = entry_low * 0.97  # 近似止损
-                    hit_stop = int(min_close <= stop_price)
-                    target_price = entry_low * 1.05
-                    hit_t1 = int(max_close >= target_price)
+                    # 止损/止盈：按时间顺序走，先触及哪个就以哪个为准，两者互斥。
+                    # 此前是「用整段最高价判止盈 + 整段最低价判止损」——只要期间既
+                    # 冲高又探底就两边都记命中（实测止盈 97.5% / 止损 92.6%，自相矛盾）。
+                    # 价格用库里存的 stop_loss / target_1；此前用 entry_low*0.97 / *1.05 近似。
+                    # 从第 0 根起算——进场价是这根的开盘价，它的高低点都在进场之后。
+                    hit_stop = hit_t1 = 0
+                    for i in range(len(df_after)):
+                        if stop_loss and float(lows[i]) <= stop_loss:
+                            hit_stop = 1
+                            break
+                        if target_1 and float(highs[i]) >= target_1:
+                            hit_t1 = 1
+                            break
 
                     review_days = len(df_after)
 
                     conn.execute(
-                        """UPDATE recommendations SET 
+                        """UPDATE recommendations SET
                            review_date=date('now'),
                            actual_return=?, hit_stop_loss=?, hit_target_1=?,
                            max_return=?, max_drawdown=?, review_days=?
@@ -179,7 +207,7 @@ class RecommendationTracker:
                 except Exception:
                     continue
             conn.commit()
-            logger.info(f"回溯完成: {len(results)} 条, 成功率 {sum(1 for r in results if r['actual_return'] > 0)}/{len(results)}")
+            logger.info(f"回溯完成: {len(results)} 条, 收涨 {sum(1 for r in results if r['actual_return'] > 0)}/{len(results)}")
             return results
 
     def get_stats(self) -> dict:
