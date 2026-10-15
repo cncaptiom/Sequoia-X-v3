@@ -73,7 +73,7 @@ def _standardize_variant(self, results: list[AnalysisResult], *, skip_zeros: boo
         r.strategy_scores = {k: round(v, 1) for k, v in ortho.items()}
         r.per_strategy_scores = {k: round(v, 1) for k, v in std_scores.items()}
         r.category_scores = cat
-        r.rating = self._calculate_rating(r.trend_passed, total)
+        r.rating = self._calculate_rating(r.trend_passed, r.total_score)
 
 
 def _run_arm(engine, symbols, regime_label: str, *, skip_zeros: bool):

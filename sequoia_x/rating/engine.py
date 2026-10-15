@@ -471,14 +471,16 @@ class RatingEngine:
 
         # 正交化后的评分用于输出（同类策略等值）
         output_strategy_scores = {k: round(v, 1) for k, v in ortho_scores.items()}
-        rating = self._calculate_rating(trend_passed, total_score)
+        # 定级与显示用同一个数（理由见 _cross_sectional_standardize）
+        stored_score = round(total_score, 1)
+        rating = self._calculate_rating(trend_passed, stored_score)
 
         return AnalysisResult(
             symbol=symbol,
             name=name,
             trend_passed=trend_passed,
             trend_description=trend_desc,
-            total_score=round(total_score, 1),
+            total_score=stored_score,
             rating=rating,
             strategy_scores=output_strategy_scores,
             raw_strategy_scores=strategy_scores,
@@ -612,11 +614,14 @@ class RatingEngine:
                 m = std_by_strat.get(s)
                 std_scores[s] = m.get(r.symbol, v) if m else v
             total, ortho, cat = self._combine_scores(std_scores)
+            # 定级与显示必须用**同一个数**：先圆整存下，后面一律引用它。
+            # 此前是「存 round(total,1)、按未圆整的 total 定级」，于是在阈值附近
+            # 出现「显示 0.5 却判 attention」「显示 -0.0 却判 avoid」这类自相矛盾。
             r.total_score = round(total, 1)
             r.strategy_scores = {k: round(v, 1) for k, v in ortho.items()}
             r.per_strategy_scores = {k: round(v, 1) for k, v in std_scores.items()}
             r.category_scores = cat
-            r.rating = self._calculate_rating(r.trend_passed, total)
+            r.rating = self._calculate_rating(r.trend_passed, r.total_score)
 
     def _check_trend(self, df: pd.DataFrame) -> tuple[bool, str, list[str]]:
         close = df["close"]
