@@ -415,6 +415,24 @@ r.rating = self._calculate_rating(r.trend_passed, total)     # 定级用：未�
 
 ---
 
+### 🧹 2026-10-15「顺手清理」批次结果
+
+逐条核实后的处置（未列出的项见各自条目的「已修」注）：
+
+| 条目 | 结论 |
+|---|---|
+| **M2** 回测成本不一致 | **已修** `run_consensus_backtest.py`：补上卖出印花税 `0.0005`（两处平仓逻辑）。注：该脚本内部还有**两段几乎相同的回测循环**、且同样用「当日收盘算信号 + 同日收盘成交」，未动，建议后续合并重写 |
+| **M3** `max_hold_days` 自然日 | **已修** `backtest/engine.py`：持仓天数改按**交易日**算（`hold_days = i - pos["entry_idx"]`），与 `signal/models.py` 声明的「20 交易日」一致。此前 20 自然日 ≈ 14 交易日 |
+| **M4** 止损止盈仅按收盘判定 | **未改，需要你定**。这是建模选择（盘中触发 vs 收盘触发、成交用触发价还是收盘价、跳空怎么处理），且与刚上的 `fill_mode` 有交互。当前只在代码里没有说明这是简化——**已在上方标注** |
+| **M5** mootdx 无超时 | **已修** `utils/name_resolver.py`：mootdx 抽成 `_try_mootdx()` 并加 8 秒超时。此前顺序是反的——先试的没保护、后试的 baostock 反而有 |
+| **M6** baostock 重连三套 | **未改，需要先判互补还是重复**。需要实际读三处（`utils/baostock_guard.py` socket 层 / `factors/__init__.py` 错误码层 / `rating/engine.py` 错误码层）再定，不是能顺手改的 |
+| **M7** `factors` 文档过时 | **已修**：`factors/__init__.py` 的数据来源注释改成 baostock。**但台账原文有一处不准**——`[factors]` extra 并非死配置，`fund_research/analysis/screener.py:141` 仍在用 akshare；已在 `pyproject.toml` 与 README 标注清楚，**不能删** |
+| **M9** `_check_data_freshness` 调两次 | **已修** `main.py`：加 `phase` 参数，`_run_daily` 的两处分别标「同步前 / 同步后」。日志里不再出现两行一模一样的输出 |
+| **M12** `x or 0.0` 遇 `-0.0` | **已排查完毕，无需改动**。全仓 4 处：`factors/__init__.py:266`、`rating/engine.py:803/804`（都是 `eps`/`npMargin`，而使用它们的判断是 `if eps and eps > 0`——`0.0` 与 `-0.0` 同为 falsy，行为相同）；`tracker/review.py:222`（仅显示层）。**没有一处在符号敏感的分支上** |
+| **L1** 名称解析两处重复 | **保留**。`feishu.py` 那份是「推送失败时的兜底」，与 `name_resolver` 的缓存批量查询不是同一场景；合并收益小、风险大于收益 |
+
+---
+
 ## 四、设计层问题（不是缺陷，但影响更大）
 
 以下为 2026-10-13 实测发现，已记入 `CHANGELOG.md` 第七节。

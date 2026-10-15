@@ -57,14 +57,19 @@ class CoreStepFailure(RuntimeError):
     warning 就继续走到「运行完成」，定时任务与人都察觉不到整条链路已经废了（见 M10）。
     """
 
-def _check_data_freshness(engine, logger) -> dict:
-    """检查数据库中股票数据的新鲜度，返回报告。"""
+def _check_data_freshness(engine, logger, phase: str = "") -> dict:
+    """检查数据库中股票数据的新鲜度，返回报告。
+
+    phase 用来区分调用时机——`_run_daily` 在同步数据前后各调一次，不标注的话
+    日志里会出现两行一模一样的输出，看起来像跑了两遍。
+    """
     from sequoia_x.data.engine import DataValidator
     report = DataValidator.compute_data_health_report(engine.db_path)
     stale = report.get("stale_symbols", 0)
     total = report.get("total_symbols", 0)
     fresh = total - stale
-    logger.info(f"数据新鲜度: {fresh}/{total} 只近5个交易日有更新, {stale} 只数据过期")
+    tag = f"（{phase}）" if phase else ""
+    logger.info(f"数据新鲜度{tag}: {fresh}/{total} 只近5个交易日有更新, {stale} 只数据过期")
     if total > 0 and stale > total * 0.3:
         logger.warning(f"超过30%股票数据过期，选股结果可能不准确！建议执行 --backfill 或检查网络")
     return report
@@ -347,7 +352,7 @@ def _run_daily(settings, logger, engine, notifier) -> None:
     依赖本函数是否被执行。详见 docs/code-review-2026-10-13.md 的 M13。
     """
     # ── 数据新鲜度报告 ──
-    _check_data_freshness(engine, logger)
+    _check_data_freshness(engine, logger, "同步前")
 
     # ── A 阶段：同步数据 + 执行策略 ──
     logger.info("开始拉取最新快照...")
@@ -566,7 +571,7 @@ def _run_daily(settings, logger, engine, notifier) -> None:
         logger.error(f"信号生成异常: {e}")
         raise CoreStepFailure("信号生成异常") from e
 
-    _check_data_freshness(engine, logger)
+    _check_data_freshness(engine, logger, "同步后")
     logger.info("日常模式运行完成")
 
 

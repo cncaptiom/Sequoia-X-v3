@@ -96,6 +96,7 @@ def multi_strategy_backtest():
     capital = 1_000_000
     max_positions = 10
     commission = 0.0003
+    stamp_tax = 0.0005   # 卖出印花税（2023-08 起 0.05%）——此前整个脚本漏了这一项
     slippage = 0.001
     stop_loss = -0.08
     take_profit = 0.20
@@ -150,6 +151,7 @@ def multi_strategy_backtest():
                     pnl = (ex_price - pos["entry_price"]) * pos["quantity"]
                     pnl -= pos["entry_price"] * pos["quantity"] * commission
                     pnl -= ex_price * pos["quantity"] * commission
+                    pnl -= ex_price * pos["quantity"] * stamp_tax
                     trades.append({"symbol": sym, "entry": pos["entry_date"], "exit": current_date,
                                    "entry_price": pos["entry_price"], "exit_price": ex_price,
                                    "quantity": pos["quantity"], "pnl": round(pnl, 2),
@@ -224,6 +226,7 @@ def multi_strategy_backtest():
                     pnl = (ex_price - pos["entry_price"]) * pos["quantity"]
                     pnl -= pos["entry_price"] * pos["quantity"] * commission
                     pnl -= ex_price * pos["quantity"] * commission
+                    pnl -= ex_price * pos["quantity"] * stamp_tax
                     trades.append({"symbol": sym, "entry": pos["entry_date"], "exit": current_date,
                                    "entry_price": pos["entry_price"], "exit_price": ex_price,
                                    "quantity": pos["quantity"], "pnl": round(pnl, 2),

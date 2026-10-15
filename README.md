@@ -275,7 +275,7 @@ Flutter / Provider / Dio / Hive / fl_chart
 git clone https://github.com/cncaptiom/Sequoia-X-v3.git
 cd Sequoia-X-v3
 pip install .
-pip install ".[factors]"    # 可选扩展（akshare），当前主包已无代码引用
+pip install ".[factors]"    # 可选：fund_research 用（sequoia_x 主包已不引用 akshare）
 pip install efinance        # fundamental 财务数据走全市场批量，可选（缺失则回退 baostock）
 ```
 

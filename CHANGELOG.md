@@ -749,3 +749,24 @@ H4 补上 `_run_rating` 的 `record_signals` 后，从 10-13 起才会按日累�
 已经自洽（`-0.0 >= 0` → attention），但显示仍不美观。在 `rating/engine.py` 两处
 （`analyze()` 与 `_cross_sectional_standardize()`）加 `+ 0.0` 归一，
 其余数值不受影响（已验证：`-0.1` 仍是 `-0.1`、`0.5` 仍是 `0.5`）。
+
+## 二十一、顺手清理批次：M2/M3/M5/M7/M9 + M12 结案（2026-10-15）
+
+| 条目 | 处置 |
+|---|---|
+| **M2** 回测成本三处不一致 | 修：`run_consensus_backtest.py` 补上卖出印花税 `0.0005`（两处平仓逻辑）|
+| **M3** `max_hold_days` 用自然日 | 修：`backtest/engine.py` 改按**交易日**算（`hold_days = i - pos["entry_idx"]`）。此前 20 自然日 ≈ 14 交易日，与 `signal/models.py` 声明的「20 交易日」差 30% |
+| **M5** mootdx 分支无超时 | 修：抽成 `_try_mootdx()` 并加 8 秒超时。此前顺序是反的——先试的没保护、后试的 baostock 反而有 |
+| **M7** `factors` 文档过时 | 修：数据来源注释改成 baostock。**台账原文有一处不准**——`[factors]` extra 不是死配置，`fund_research/analysis/screener.py:141` 仍在用 akshare；已在 `pyproject.toml` 与 README 标注，**不能删** |
+| **M9** `_check_data_freshness` 调两次 | 修：加 `phase` 参数，`_run_daily` 两处分别标「同步前 / 同步后」，日志不再出现两行一模一样 |
+| **M12** `x or 0.0` 遇 `-0.0` | **排查完毕，无需改动**：全仓 4 处，没有一处在符号敏感的分支上（`eps` / `npMargin` 的 `0.0` 与 `-0.0` 同为 falsy，走同一分支；`review.py:222` 仅显示层）|
+| **L1** 名称解析两处重复 | 保留：`feishu.py` 那份是「推送失败时的兜底」，与 `name_resolver` 的缓存批量查询不是同一场景，合并风险大于收益 |
+
+**两项未做，需要你定**：
+
+- **M4** 止损/止盈目前只在**收盘**判定一次、且用同一收盘价平仓（盘中跌破 -8% 不会触发）。
+  这是建模选择——盘中触发 vs 收盘触发、成交用触发价还是收盘价、跳空怎么处理——
+  且与刚上的 `fill_mode` 有交互。已在台账里标注这是简化，**未改代码**
+- **M6** baostock 重连有三套实现（`utils/baostock_guard.py` 的 socket 层、
+  `factors/__init__.py` 与 `rating/engine.py` 的错误码层）——要先判断是互补还是重复，
+  各套的退避/重试次数不一致会很难排查

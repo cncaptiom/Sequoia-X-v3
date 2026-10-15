@@ -7,25 +7,20 @@ class NameResolver:
         self._names: dict[str, str] = {}
         self._loaded = False
 
+    # mootdx 走 TCP，数据源不可达时不是报错而是**挂住**（它的 K 线接口已经死过一次），
+    # 所以必须放进超时里调用。
+    _MOOTDX_TIMEOUT = 8.0
+
     def _load_all(self) -> None:
         if self._loaded:
             return
+
         # 优先使用 mootdx（TCP 协议，不封 IP）
-        try:
-            from mootdx.quotes import Quotes
-            client = Quotes.factory(market='std')
-            for market in [1, 0]:
-                stocks = client.stocks(market=market)
-                if stocks is not None:
-                    for _, row in stocks.iterrows():
-                        code = str(row['code']).zfill(6)
-                        name = str(row.get('name', ''))
-                        if code and name and not any(name.startswith(p) for p in ('上证', '深证', '创业', '中小', '基金', 'ETF', '国债')):
-                            self._names[code] = name
+        names = self._try_mootdx()
+        if names:
+            self._names = names
             self._loaded = True
             return
-        except Exception:
-            pass
 
         # 降级到 baostock（带超时保护，防止卡死）
         try:
@@ -58,6 +53,42 @@ class NameResolver:
                 self._loaded = True
         except Exception:
             pass
+
+    def _try_mootdx(self) -> dict[str, str] | None:
+        """mootdx 取全市场股票名；超时或失败返回 None。
+
+        此前这一支没有超时——数据源不可达时会**挂住整个进程**，而它每只股票都会被
+        调到（`generator.py` 的信号生成链路）。后试的 baostock 反而有超时，顺序是反的。
+        """
+        import threading
+
+        box: dict = {}
+
+        def _run():
+            try:
+                from mootdx.quotes import Quotes
+                client = Quotes.factory(market='std')
+                picked: dict[str, str] = {}
+                for market in [1, 0]:
+                    stocks = client.stocks(market=market)
+                    if stocks is not None:
+                        for _, row in stocks.iterrows():
+                            code = str(row['code']).zfill(6)
+                            name = str(row.get('name', ''))
+                            if code and name and not any(
+                                    name.startswith(p)
+                                    for p in ('上证', '深证', '创业', '中小', '基金', 'ETF', '国债')):
+                                picked[code] = name
+                box["names"] = picked
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=self._MOOTDX_TIMEOUT)
+        if t.is_alive():
+            return None
+        return box.get("names") or None
 
     def get_name(self, symbol: str) -> str:
         self._load_all()

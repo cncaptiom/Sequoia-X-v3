@@ -90,8 +90,8 @@ class FactorCalculator:
 
     数据来源:
       - 价格/成交量: baostock (已有 DataEngine)
-      - 财务数据: akshare (stock_financial_abstract_ths 或 stock_yjbb_em)
-      - 市值: akshare stock_info_a_code_name
+      - 财务数据 / 市值: baostock（此前文档写的 akshare 是旧实现的残留，
+        主包已无 akshare 引用）
     """
 
     def __init__(self, data_engine):

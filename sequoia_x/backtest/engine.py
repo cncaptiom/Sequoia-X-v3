@@ -30,7 +30,7 @@ class BacktestConfig:
     slippage: float = 0.001                     # 滑点（千一）
     stop_loss_pct: float = -0.08                # 止损线（-8%）
     take_profit_pct: float = 0.20               # 止盈线（+20%）
-    max_hold_days: int = 20                     # 最长持仓天数
+    max_hold_days: int = 20                     # 最长持仓【交易日】数（与 signal/models.py 一致）
     min_bars: int = 30                          # 最少需要的历史K线
     benchmark_symbol: str = "sh.000300"         # 基准：沪深300
     # 成交时点：
@@ -213,6 +213,8 @@ class BacktestEngine:
         strategy = strategy_class(**kwargs)
         strategy.preload(all_data)
 
+        date_idx = {d: k for k, d in enumerate(all_dates)}
+
         for i in range(cfg.min_bars, len(all_dates)):
             current_date = all_dates[i]
 
@@ -240,7 +242,9 @@ class BacktestEngine:
                         continue
                     current_price = float(df_cut["close"].iloc[-1])
                     pnl_pct = (current_price - pos["entry_price"]) / pos["entry_price"]
-                    hold_days = (pd.Timestamp(current_date) - pd.Timestamp(pos["entry_date"])).days
+                    # 持仓天数按**交易日**算。此前用自然日：`max_hold_days=20` 实际只有
+                    # 约 14 个交易日，比 signal/models.py 声明的「20 交易日」短约 30%。
+                    hold_days = i - pos["entry_idx"]
 
                     exit_reason = None
                     if pnl_pct <= cfg.stop_loss_pct:
@@ -314,6 +318,7 @@ class BacktestEngine:
                         capital -= cost
                         positions[sym] = {
                             "entry_date": fill_date,
+                            "entry_idx": date_idx.get(fill_date, i + 1),
                             "entry_price": entry_price,
                             "quantity": quantity,
                         }
