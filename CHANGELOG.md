@@ -650,3 +650,41 @@ Top15 只重叠 2 只）需要跑一次全市场信号生成；更划算的是�
 **默认已于同日切换为 `next_open`**（用户确认）。影响面：`main.py --backtest`、
 `run_multi_backtest.py`；README 的回测节已写明口径，**更早的回测数字与截图都带着这个偏差**。
 需要旧口径做对照时显式传 `BacktestConfig(fill_mode="same_close")`。
+
+## 十七、M10：核心步骤失败不再静默报「运行完成」（2026-10-15）
+
+`_run_daily` 的信号生成失败只打 `warning` 就继续走到「日常模式运行完成」，
+退出码仍是 0 —— 定时任务与人都不告警。
+
+新增 `main.CoreStepFailure(RuntimeError)`，抛出去让 `main()` 已有的兜底
+`except → sys.exit(1)` 生效：
+
+- `_run_daily` 信号生成两处 `except`：`warning` → `error` + `raise`
+- `_run_rating` 的 COS 同步：**顺带查出更隐蔽的一条**——`_upload_to_cos` 的**返回值被整个
+  丢弃**，而它会返回 `ok=False` 表示「部分文件没传上去」（手机端会拿到旧数据甚至空数据），
+  这条路径此前连 warning 都没有。现在检查返回值，失败即 raise
+- `_run_daily` 的 COS 调用同样补上返回值检查
+
+## 十八、手机端数据层专项审查（2026-10-15）
+
+`gpfxapp/` 此前一直不在审查范围内。本次按「PC 上传 ↔ 手机端解析/合并/兜底」这条链路
+做了全库只读排查，完整报告见 **`docs/mobile-datalayer-review-2026-10-15.md`**（8 项，
+其中 6 项已逐条回源核实）。
+
+**根因是两条**（其余是衍生）：
+
+1. **本地离线分数与 PC 分数共用 `1.5/1.0/0.5` 阈值，但量纲完全不同**——
+   PC 是截面 Z 合成（实测 −2.9 ~ +1.6），本地是「原始整数分 × 权重」加权和。
+   PC 数据缺失时本地极易 ≥1.5 直接判 S，而这个 S 不是 PC 的 S。
+2. **本地引擎不算 fundamental，而 D5 之后它在 PC 强熊下占 32%**——
+   `weightFundamental` 在 `strategy_config.dart` 里字段/`toJson`/`fromJson` 全有、
+   能同步下来，但 `analysis_engine.dart` 的 `weights` 字典**从不放它**。
+
+其余：`mergePcData` 分数取 PC 而 `signals` 留本地（`pc_merge.dart:32`）；
+`home_page.dart` 同文件里阈值既有字面量又有常量；手机端有**第三份 regime 权重表**
+（`stock_detail_page.dart:784`）且无 fundamental 类；`macdRsiEnabled` 默认值与 PC 相反。
+
+**顺带确认一条好消息**：配置同步链路是通的——`StrategyConfig.fromJson` 期望 camelCase，
+PC `to_dict()` 输出的正是 camelCase。问题不在常量值写错，而在**同一个常量被用在两种量纲上**。
+
+本轮**未改手机端代码**，先出报告。

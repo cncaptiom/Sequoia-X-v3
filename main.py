@@ -49,6 +49,14 @@ from sequoia_x.regime import RegimeDetector, REGIME_LABELS
 from sequoia_x.utils.name_resolver import NameResolver
 from sequoia_x import cloud
 
+
+class CoreStepFailure(RuntimeError):
+    """核心步骤失败（信号生成、COS 同步等）。
+
+    抛出去让 main() 的兜底 except 以**非零退出码**结束——此前这些失败只打个
+    warning 就继续走到「运行完成」，定时任务与人都察觉不到整条链路已经废了（见 M10）。
+    """
+
 def _check_data_freshness(engine, logger) -> dict:
     """检查数据库中股票数据的新鲜度，返回报告。"""
     from sequoia_x.data.engine import DataValidator
@@ -543,17 +551,25 @@ def _run_daily(settings, logger, engine, notifier) -> None:
             report_gen.push_feishu(report_result, webhook_key="ma_volume")
 
             # 同步到腾讯云COS（供手机端实时监控）
-            _upload_to_cos(settings, logger, engine, signals=signals, regime_result=regime)
+            # 返回值必须看：`_upload_to_cos` 会返回 ok=False 表示部分失败（手机端可能
+            # 拿不到今日数据），此前这个返回值被整个丢弃，失败是静默的。
+            if not _upload_to_cos(settings, logger, engine, signals=signals,
+                                  regime_result=regime):
+                raise CoreStepFailure("COS 同步未全部成功")
         else:
             logger.info("无候选股票，跳过信号生成")
 
     except ImportError as ie:
-        logger.warning(f"信号/推荐模块导入失败: {ie}，跳过信号生成")
+        logger.error(f"信号/推荐模块导入失败: {ie}")
+        raise CoreStepFailure("信号/推荐模块导入失败") from ie
     except Exception as e:
-        logger.warning(f"信号生成异常: {e}")
+        logger.error(f"信号生成异常: {e}")
+        raise CoreStepFailure("信号生成异常") from e
 
     _check_data_freshness(engine, logger)
     logger.info("日常模式运行完成")
+
+
 def _is_trading_day() -> bool:
     """判断今天是否是 A 股交易日。
 
@@ -849,11 +865,16 @@ def _run_rating(settings, logger, engine, notifier) -> None:
         report_gen.push_feishu(report_result, webhook_key="rating")
         logger.info(f"综合推荐报告已推送到飞书: {len(signals)} 只")
 
-        # 同步到腾讯云COS（同时上传评级结果和推荐信号）
+        # 同步到腾讯云COS（同时上传评级结果和推荐信号）。
+        # 返回值必须看：ok=False 表示部分文件没传上去，手机端会拿到旧数据甚至空数据；
+        # 此前这个返回值被整个丢弃、异常也只打 warning → 静默成功（见 M10）。
         try:
-            _upload_to_cos(settings, logger, engine, rating_results=all_results, signals=signals if signals else None, regime_result=regime)
+            ok = _upload_to_cos(settings, logger, engine, rating_results=all_results,
+                                signals=signals if signals else None, regime_result=regime)
         except Exception as exc:
-            logger.warning(f"COS upload failed: {exc}")
+            raise CoreStepFailure(f"COS 上传异常: {exc}") from exc
+        if not ok:
+            raise CoreStepFailure("COS 上传未全部成功（手机端可能拿到旧数据）")
 
 
 def _run_backtest(settings, logger, engine) -> None:

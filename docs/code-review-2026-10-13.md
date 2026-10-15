@@ -327,9 +327,20 @@ guard 的设计意图是唯一出口。**待确认**：三者是互补（socket 
 
 `main.py:332`（开头）与 `main.py:544`（结尾）调用完全相同，输出不区分，看日志会以为跑了两遍。
 
-### 🟡 M10 — 推荐模块失效仍报「运行完成」
+### 🟡 M10 — 推荐模块失效仍报「运行完成」（**已修 2026-10-15**）
 
 `main.py:539-545`：`except ImportError` 与 `except Exception` 都只 `logger.warning`，然后继续走 `_check_data_freshness` 和 `logger.info("日常模式运行完成")`。**核心功能整体失效、退出码仍为 0**，定时任务不会告警。
+
+> **2026-10-15 已修**。新增 `main.CoreStepFailure(RuntimeError)`，把它抛出去让 `main()`
+> 里已有的兜底 `except → sys.exit(1)` 生效：
+> - `_run_daily` 的信号生成两处 `except`：`warning` → `error` + `raise`
+> - `_run_rating` 的 COS 同步：**顺带发现更隐蔽的一条**——`_upload_to_cos` 的**返回值被整个
+>   丢弃**，而它会返回 `ok=False` 表示「部分文件没传上去」。也就是说踩到部分失败时
+>   连一条 warning 都没有。现在改为检查返回值，失败即 raise
+> - `_run_daily` 里的 COS 调用同样补上了返回值检查
+>
+> 未改：`_run_backtest` 每个策略的失败已经 `logger.error` 并记进报告（`main.py:911`），
+> 属于正常降级，不动。
 
 ### 🟡 M11 — 圆整与定级用了两个不同的数（**已修 2026-10-15**）
 
