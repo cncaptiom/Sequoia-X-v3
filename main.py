@@ -290,14 +290,18 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
 
 
 def _install_schedule() -> None:
-    """安装 Windows 每日 21:00 定时任务（SYSTEM 账户，息屏/未登录也可运行）。"""
+    """安装 Windows 每日 21:00 定时任务（SYSTEM 账户，息屏/未登录也可运行）。
+
+    跑的是 `--rating`（生产实际使用的路径），**不是**默认的 `_run_daily`——
+    后者是备用回退路径，两条流水线的输出并不相同。
+    """
     python_exe = sys.executable
     script_path = os.path.abspath(__file__)
     work_dir = os.path.dirname(script_path)
 
     cmd = [
         "schtasks", "/create", "/tn", "Sequoia-X选股",
-        "/tr", f'cmd /c cd /d "{work_dir}" && "{python_exe}" "{script_path}"',
+        "/tr", f'cmd /c cd /d "{work_dir}" && "{python_exe}" "{script_path}" --rating',
         "/sc", "daily", "/st", "21:00",
         "/ru", "SYSTEM",
         "/f",
@@ -306,7 +310,7 @@ def _install_schedule() -> None:
         subprocess.run(
             cmd, cwd=work_dir, check=True, capture_output=True, text=True
         )
-        print("[OK] 定时任务已安装：每日 21:00 自动运行 Sequoia-X 选股")
+        print("[OK] 定时任务已安装：每日 21:00 自动运行 python main.py --rating")
         print("[提示] 以 SYSTEM 权限运行，息屏/未登录状态下仍可执行")
     except subprocess.CalledProcessError as exc:
         print(f"[ERROR] 安装定时任务失败: {exc.stderr or exc.stdout}")
