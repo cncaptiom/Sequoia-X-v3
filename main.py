@@ -757,7 +757,11 @@ def _run_rating(settings, logger, engine, notifier) -> None:
         # **根本没有这些类**——纯属虚构，只会让报告看起来像另一套体系的策略。
         strategy_map = {}
         for r in candidates:
-            trigger_strats = [sk for sk, sv in r.strategy_scores.items() if sv > 0]
+            # 用**原始分**（`raw_strategy_scores`）而不是类内均分后的 `strategy_scores`：
+            # 后者给同类内每个策略赋同一个类别均分，于是「一个类别为正」会按成员数被
+            # 放大（reversal 有 meanReversion + kdj 两个成员，一个正类别直接贡献 2），
+            # 于是「多策略共振」数出来的「3 个策略」可能只是「2 个类别为正」。见台账 D4。
+            trigger_strats = [sk for sk, sv in r.raw_strategy_scores.items() if sv > 0]
             if not trigger_strats:
                 trigger_strats = ["rating"]
             strategy_map[r.symbol] = trigger_strats
@@ -823,7 +827,8 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                 sname = r.name or stock_names.get(r.symbol, r.symbol)
                 sig = TradeSignal(
                     symbol=r.symbol, name=sname,
-                    strategies=list(r.strategy_scores.keys()) if r.strategy_scores else ["rating"],
+                    strategies=([sk for sk, sv in r.raw_strategy_scores.items() if sv > 0]
+                                or ["rating"]),
                     current_price=r.current_price,
                     entry_zone_low=round(entry_low, 2),
                     entry_zone_high=round(entry_high, 2),
