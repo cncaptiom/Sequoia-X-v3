@@ -240,26 +240,39 @@ class BacktestEngine:
                     df_cut = df_sym[df_sym["date"] <= current_date]
                     if df_cut.empty:
                         continue
-                    current_price = float(df_cut["close"].iloc[-1])
-                    pnl_pct = (current_price - pos["entry_price"]) / pos["entry_price"]
+                    bar = df_cut.iloc[-1]
+                    open_px = float(bar["open"])
+                    low_px = float(bar["low"])
+                    high_px = float(bar["high"])
                     # 持仓天数按**交易日**算。此前用自然日：`max_hold_days=20` 实际只有
                     # 约 14 个交易日，比 signal/models.py 声明的「20 交易日」短约 30%。
                     hold_days = i - pos["entry_idx"]
 
+                    # 止损/止盈按**盘中**（当日 low/high）判定，并在触发价成交。
+                    # 这两类是可以预挂的条件单，盘中触发即可成交；此前只在收盘比一次，
+                    # 盘中跌破止损线但收盘拉回就不会触发，回测偏乐观（见台账 M4）。
+                    # 跳空越过触发价时以当日开盘价成交（取更差的一边）。
+                    stop_px = pos["entry_price"] * (1 + cfg.stop_loss_pct)
+                    take_px = pos["entry_price"] * (1 + cfg.take_profit_pct)
                     exit_reason = None
-                    if pnl_pct <= cfg.stop_loss_pct:
-                        exit_reason = "stop_loss"
-                    elif pnl_pct >= cfg.take_profit_pct:
-                        exit_reason = "take_profit"
+                    trigger_px = None
+                    if low_px <= stop_px:
+                        exit_reason, trigger_px = "stop_loss", min(open_px, stop_px)
+                    elif high_px >= take_px:
+                        exit_reason, trigger_px = "take_profit", max(open_px, take_px)
                     elif hold_days >= cfg.max_hold_days:
                         exit_reason = "time_exit"
 
                     # A股执行约束：成交价一字跌停则卖不出，持仓顺延到下一交易日
                     if exit_reason:
-                        fill = self._fill(df_sym, current_date)
-                        if fill is None:
-                            continue
-                        exit_date, fill_price = fill
+                        if trigger_px is not None:
+                            exit_date, fill_price = current_date, trigger_px
+                        else:
+                            # 时间到期不是条件单，与开仓同口径按 fill_mode 决定成交时点
+                            fill = self._fill(df_sym, current_date)
+                            if fill is None:
+                                continue
+                            exit_date, fill_price = fill
                         prev_rows = df_sym[df_sym["date"] < exit_date]
                         if not prev_rows.empty:
                             prev_close = float(prev_rows["close"].iloc[-1])

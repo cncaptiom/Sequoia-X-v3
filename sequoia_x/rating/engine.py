@@ -713,53 +713,22 @@ class RatingEngine:
         current = float(df["close"].iloc[-1])
         return max(q3, current * 1.03)
 
-    # baostock 财务查询：网络类错误码才触发重连；"无数据"等正常错误码不重连
-    _BS_NETWORK_ERRORS = frozenset({
-        "10001001", "10002001", "10002002", "10002003", "10002004",
-        "10002005", "10002006", "10002007", "10002008",
-    })
-    _BS_QUERY_INTERVAL = 0.15  # 财务查询节流间隔（秒），控制请求频率避免被限流踢线
-    _bs_last_query_ts = 0.0
-
-    @classmethod
-    def _bs_throttle(cls) -> None:
-        """两次 baostock 查询间至少间隔 _BS_QUERY_INTERVAL，降低被服务端踢连接的概率。"""
-        import time
-        now = time.monotonic()
-        wait = cls._bs_last_query_ts + cls._BS_QUERY_INTERVAL - now
-        if wait > 0:
-            time.sleep(wait)
-        cls._bs_last_query_ts = time.monotonic()
+    # baostock 财务查询的节流间隔（秒），控制请求频率避免被限流踢线。
+    # 重试循环与网络类错误码集合统一在 sequoia_x.utils.baostock_guard.query_with_reconnect
+    # ——此前 RatingEngine 与 FactorCalculator 各写了一份完全相同的循环。
+    _BS_QUERY_INTERVAL = 0.15
 
     @classmethod
     def _bs_query_with_reconnect(cls, query_fn, *args, **kwargs):
-        """执行 baostock 查询；连接被服务端断开（WinError 10054 等）时 logout+login 重试。
+        """执行 baostock 查询；连接被断开（WinError 10054 等）时 logout+login 重试。
 
-        网络类错误码（10xx/1002xxxx）或抛异常才重连；无数据等正常错误码直接返回。
+        实现在 `sequoia_x.utils.baostock_guard.query_with_reconnect`（含节流）。
         """
-        import baostock as bs
-        import time
-        rs = None
-        for attempt in range(3):
-            cls._bs_throttle()
-            try:
-                rs = query_fn(*args, **kwargs)
-            except Exception:
-                rs = None
-            if rs is not None and str(getattr(rs, "error_code", "0")) == "0":
-                return rs
-            err = getattr(rs, "error_code", None) if rs is not None else None
-            is_network = rs is None or str(err) in cls._BS_NETWORK_ERRORS
-            if not is_network:
-                return rs  # 无数据等正常错误码：重试无意义，直接返回
-            if attempt < 2:
-                try:
-                    bs.logout()
-                    bs.login()
-                except Exception:
-                    pass
-                time.sleep(1.0 * (attempt + 1))  # 退避后重试
-        return rs
+        from sequoia_x.utils.baostock_guard import query_with_reconnect
+        return query_with_reconnect(
+            query_fn, *args,
+            throttle_interval=cls._BS_QUERY_INTERVAL, **kwargs,
+        )
 
     def _fetch_financial(self, symbol: str) -> dict | None:
         """获取股票财务数据（带缓存）。优先 efinance 全市场批量，失败回退 baostock。"""

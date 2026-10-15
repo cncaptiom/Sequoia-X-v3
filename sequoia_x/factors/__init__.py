@@ -182,39 +182,16 @@ class FactorCalculator:
 
         return result
 
-    # baostock 网络类错误码：连接被服务端断开/未登录等（与 RatingEngine 一致）
-    _BS_NETWORK_ERRORS = frozenset({
-        "10001001", "10002001", "10002002", "10002003", "10002004",
-        "10002005", "10002006", "10002007", "10002008",
-    })
-
     def _bs_query_with_reconnect(self, query_fn, *args, **kwargs):
         """执行 baostock 查询；连接被断开（WinError 10054 等）时 logout+login 重试。
 
-        网络类错误码或抛异常才重连；"无数据"等正常错误码直接返回不重试。
+        实现在 `sequoia_x.utils.baostock_guard.query_with_reconnect`。
+        此前本方法与 `RatingEngine._bs_query_with_reconnect` 是一份完全相同的拷贝
+        （只差一个节流），错误码集合也各写了一遍——已收敛到那一个实现。
+        本类**不带节流**（throttle_interval=0），保持原有请求频率。
         """
-        import baostock as bs
-        import time
-        rs = None
-        for attempt in range(3):
-            try:
-                rs = query_fn(*args, **kwargs)
-            except Exception:
-                rs = None
-            if rs is not None and str(getattr(rs, "error_code", "0")) == "0":
-                return rs
-            err = getattr(rs, "error_code", None) if rs is not None else None
-            is_network = rs is None or str(err) in self._BS_NETWORK_ERRORS
-            if not is_network:
-                return rs  # 无数据等正常错误码：重试无意义，直接返回
-            if attempt < 2:
-                try:
-                    bs.logout()
-                    bs.login()
-                except Exception:
-                    pass
-                time.sleep(1.0 * (attempt + 1))  # 退避后重试
-        return rs
+        from sequoia_x.utils.baostock_guard import query_with_reconnect
+        return query_with_reconnect(query_fn, *args, **kwargs)
 
     def _get_fundamental(self, symbol: str) -> Optional[dict]:
         """通过 baostock 获取基本面数据（带缓存）。"""

@@ -118,3 +118,66 @@ def install() -> None:
     _orig_send_msg = su.send_msg
     su.send_msg = _send_msg
     _installed = True
+
+
+# ── 错误码层重试 ──
+#
+# 与上面的 socket 层加固**互补**，不是重复：
+#   · 上面那层管传输——recv 超时、对端关闭、断线重发；
+#   · 这一层管 baostock **返回非零 error_code** 的情况（socket 没抛异常，但查询失败）。
+#
+# 这一层原先在 `rating/engine.py` 与 `factors/__init__.py` 各写了一份**完全相同的**
+# 重试循环（只差一个节流），错误码集合也各写了一遍——收敛到这里。
+
+# baostock 网络类错误码：连接被服务端断开 / 未登录等
+BS_NETWORK_ERRORS = frozenset({
+    "10001001", "10002001", "10002002", "10002003", "10002004",
+    "10002005", "10002006", "10002007", "10002008",
+})
+
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF = 1.0  # 第 n 次重试等待 n * 基数（秒）
+
+_last_query_ts = 0.0
+"""上一次查询的时刻，供跨调用的节流使用（模块级，所以是跨调用生效的）。"""
+
+
+def query_with_reconnect(query_fn, *args, throttle_interval: float = 0.0, **kwargs):
+    """执行 baostock 查询；连接被服务端断开（WinError 10054 等）时 logout+login 重试。
+
+    网络类错误码（见 `BS_NETWORK_ERRORS`）或抛异常才重连；「无数据」等正常错误码
+    直接返回不重试（重试无意义）。
+
+    `throttle_interval > 0` 时，每次尝试前保证距上一次查询至少间隔这么久——
+    降低被服务端踢连接的概率。
+    """
+    global _last_query_ts
+
+    import time
+
+    import baostock as bs
+
+    rs = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        if throttle_interval > 0:
+            wait = _last_query_ts + throttle_interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            _last_query_ts = time.monotonic()
+        try:
+            rs = query_fn(*args, **kwargs)
+        except Exception:
+            rs = None
+        if rs is not None and str(getattr(rs, "error_code", "0")) == "0":
+            return rs
+        err = getattr(rs, "error_code", None) if rs is not None else None
+        if not (rs is None or str(err) in BS_NETWORK_ERRORS):
+            return rs
+        if attempt < _RETRY_ATTEMPTS - 1:
+            try:
+                bs.logout()
+                bs.login()
+            except Exception:
+                pass
+            time.sleep(_RETRY_BACKOFF * (attempt + 1))
+    return rs
