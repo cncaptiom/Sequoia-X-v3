@@ -894,3 +894,38 @@ H4 补上 `_run_rating` 的 `record_signals` 后，从 10-13 起才会按日累�
 需联网取 tags 而失败、也无可用设备，**交互与视觉需构建后确认**。
 
 **仍未做**：PC 侧给 `signals` 补类型（做完才能让详情页显示 PC 的原始信号文案）。
+
+## 二十五、PC 侧信号补类型 + 评测按正确基准重跑（2026-10-15）
+
+### PC 的 `signals` 现在带类型，手机端详情页可以显示 PC 的原始信号
+
+**先更正上一条里的一处错误**：我写的「PC 的评级导出里根本没有 `signals` 字段」是错的——
+`AnalysisResult.to_dict()` 一直带 `"signals": self.signals[:5]`。缺的只是**类型**。
+
+- PC：新增 `RatingSignal(name, type)`；`AnalysisResult.signals` 从 `list[str]` 改为
+  `list[RatingSignal]`；`to_dict()` 输出 `[{"name":…,"type":…}]`
+- 类型不逐条标注（那要改 54 处 `signals.append()`，且像「MaVolume-金叉: 量能不足」
+  无法只从文字判断方向），而是按**产出它的策略当期得分的符号**派生，是个近似——
+  已写进 `RatingSignal` 的文档字符串
+- 手机端：`PcRatingResult.signals` 从 `List<String>` 改为 `List<PcSignal>`；
+  `mergePcData` 改为用 PC 的信号（此前 `signals: original.signals` 保留本地）；
+  `PcSignal.fromJson` 兼容旧的纯字符串格式（COS 上的文件在下一次 `--rating` 前还是旧结构）
+
+**验证**：PC `py_compile` 通过、`to_dict()` 实测输出 `[{'name': '趋势-均线多头排列',
+'type': 'bullish'}]`；手机端 `dart analyze lib/` → **0 error / 0 warning**，
+`dart format` 无新增差异。**未运行 App**。
+
+### `output/recommendation_eval.json` 已按 000905 重跑
+
+`Regime基准 000905: 522 个交易日 2024-07-01~2026-08-21`（此前是 000300，两套基准在
+668 个共同交易日里有 205 天 regime 标签不同）。重跑结果（Top15，股票池口径）：
+
+| 持有期 | 平均收益 | 中位 | 胜率 | 相对全A等权超额 |
+|---|---|---|---|---|
+| 5 日 | +1.18%（口径见文件） | −0.14% | 48.6% | **+0.54%** |
+| 10 日 | | −0.39% | 48.2% | **+0.22%** |
+| 20 日 | | −0.43% | 48.4% | **−0.22%** |
+
+**20 日超额仍是负的**（−0.22%），与「选股无优势」的既有结论一致；
+5 日有 +0.54% 的小幅超额。中位收益全为负——收益由少数大涨股拉动。
+在此之前，基于旧基准得出的「分市场状态」结论（含 2026-10-11 四层测评的相关部分）都带偏差。

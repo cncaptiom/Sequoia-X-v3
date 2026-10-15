@@ -1,3 +1,26 @@
+/// PC 传来的一条信号（`ratings/today.json` 的 `signals` 字段）。
+///
+/// `type` 决定手机端信号列表的箭头与配色。PC 侧的类型是按「产出它的策略当期得分的
+/// 符号」派生的近似（信号文字本身不带方向），所以只当作着色用，不要拿它做判断。
+class PcSignal {
+  final String name;
+  final String type;
+
+  const PcSignal({required this.name, this.type = 'neutral'});
+
+  factory PcSignal.fromJson(dynamic raw) {
+    // 兼容旧格式（纯字符串）：COS 上的文件在下一次 `--rating` 之前还是旧结构
+    if (raw is String) return PcSignal(name: raw);
+    if (raw is Map) {
+      return PcSignal(
+        name: raw['name']?.toString() ?? '',
+        type: raw['type']?.toString() ?? 'neutral',
+      );
+    }
+    return const PcSignal(name: '');
+  }
+}
+
 /// 来自PC端 Sequoia-X 的远程评级分析结果
 class PcRatingResult {
   final String symbol;
@@ -12,7 +35,7 @@ class PcRatingResult {
   /// 各策略标准化分（截面 Z-score，非类内平均），展示策略间真实差异；空则回退 strategyScores
   final Map<String, double> perStrategyScores;
   final Map<String, double> categoryScores;
-  final List<String> signals;
+  final List<PcSignal> signals;
   final double riskRewardRatio;
   final double? stopLossPrice;
   final double? takeProfitPrice;
@@ -52,8 +75,11 @@ class PcRatingResult {
       strategyScores: _parseStringDoubleMap(json['strategy_scores']),
       perStrategyScores: _parseStringDoubleMap(json['per_strategy_scores']),
       categoryScores: _parseStringDoubleMap(json['category_scores']),
-      signals:
-          (json['signals'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      signals: (json['signals'] as List?)
+              ?.map(PcSignal.fromJson)
+              .where((s) => s.name.isNotEmpty)
+              .toList() ??
+          [],
       riskRewardRatio: (json['risk_reward_ratio'] as num?)?.toDouble() ?? 0,
       stopLossPrice: (json['stop_loss_price'] as num?)?.toDouble(),
       takeProfitPrice: (json['take_profit_price'] as num?)?.toDouble(),

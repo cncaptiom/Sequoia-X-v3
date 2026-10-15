@@ -29,12 +29,29 @@ AnalysisResult mergePcData(AnalysisResult original, PcRatingResult pcRating) {
     stopLossPrice: pcRating.stopLossPrice,
     takeProfitPrice: pcRating.takeProfitPrice,
     buyRange: pcRating.buyRange,
-    signals: original.signals,
+    signals: pcRating.signals.isEmpty
+        ? original.signals
+        : pcRating.signals.map(_toSignal).toList(),
     time: original.time,
     // 分数/评级已经换成 PC 口径，下游按 PC 刻度做的判定要靠这个标记区分
     isLocalEstimate: false,
   );
 }
+
+/// PC 信号 → 本地 `Signal`。
+///
+/// PC 不提供 `description`/`score`（那一层是本地引擎独有的），只带名称与近似的类型，
+/// 因此这两个字段留空——展示处只用到 `name` 与 `type`。
+Signal _toSignal(PcSignal s) => Signal(
+      name: s.name,
+      type: switch (s.type) {
+        'bullish' => SignalType.bullish,
+        'bearish' => SignalType.bearish,
+        _ => SignalType.neutral,
+      },
+      description: '',
+      score: 0,
+    );
 
 Rating? _parsePcRating(String? rating) {
   switch (rating) {

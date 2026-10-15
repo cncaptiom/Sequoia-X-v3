@@ -317,6 +317,19 @@ class Rating:
 
 
 @dataclass
+class RatingSignal:
+    """一条评级信号。`type` 供手机端信号列表着色（bullish/bearish/neutral）。
+
+    信号的文字本身不带方向。逐条标注要改 50 多处 `signals.append()`，而且像
+    「MaVolume-金叉: 量能不足」这类无法只从文字判断属于哪一支——所以按
+    **产出它的策略当期得分的符号**派生，是个近似（见 `_check_trend` 与 `analyze`
+    的组装处）。
+    """
+    name: str
+    type: str = "neutral"
+
+
+@dataclass
 class AnalysisResult:
     """单只股票的完整分析结果。"""
     symbol: str
@@ -332,7 +345,7 @@ class AnalysisResult:
     # 各策略原始分（正交化前），供 IC 追踪使用；不用于手机端展示
     raw_strategy_scores: dict[str, float] = field(default_factory=dict)
     category_scores: dict[str, float] = field(default_factory=dict)
-    signals: list[str] = field(default_factory=list)
+    signals: list["RatingSignal"] = field(default_factory=list)
     risk_reward_ratio: float = 0.0
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
@@ -361,7 +374,7 @@ class AnalysisResult:
             "strategy_scores": {k: round(v, 1) for k, v in self.strategy_scores.items()},
             "per_strategy_scores": {k: round(v, 1) for k, v in self.per_strategy_scores.items()},
             "category_scores": {k: round(v, 1) for k, v in self.category_scores.items()},
-            "signals": self.signals[:5],
+            "signals": [{"name": s.name, "type": s.type} for s in self.signals[:5]],
             "risk_reward_ratio": round(self.risk_reward_ratio, 2),
             "stop_loss_price": round(self.stop_loss_price, 2) if self.stop_loss_price else None,
             "take_profit_price": round(self.take_profit_price, 2) if self.take_profit_price else None,
@@ -420,7 +433,7 @@ class RatingEngine:
 
         closes = df["close"].values
         last_close = float(closes[-1])
-        signals: list[str] = []
+        signals: list[RatingSignal] = []
 
         trend_passed, trend_desc, trend_sigs = self._check_trend(df)
         signals.extend(trend_sigs)
@@ -457,7 +470,11 @@ class RatingEngine:
                 try:
                     result = fn()
                     strategy_scores[strategy_key] = result.score
-                    signals.extend(result.signals)
+                    # 极性按「产出它的策略当期得分的符号」派生——见 RatingSignal 的说明。
+                    stype = ("bullish" if result.score > 0
+                             else "bearish" if result.score < 0 else "neutral")
+                    signals.extend(RatingSignal(name=s, type=stype)
+                                   for s in result.signals)
                 except Exception as exc:
                     logger.log(5, f"策略 [{strategy_key}] 执行异常: {exc}")
                     continue
@@ -636,7 +653,7 @@ class RatingEngine:
             r.category_scores = cat
             r.rating = self._calculate_rating(r.trend_passed, r.total_score)
 
-    def _check_trend(self, df: pd.DataFrame) -> tuple[bool, str, list[str]]:
+    def _check_trend(self, df: pd.DataFrame) -> tuple[bool, str, list[RatingSignal]]:
         close = df["close"]
         ma5 = close.rolling(5).mean().iloc[-1]
         ma10 = close.rolling(10).mean().iloc[-1]
@@ -645,12 +662,13 @@ class RatingEngine:
         ma60 = close.rolling(60).mean().iloc[-1] if len(df) >= 60 else 0.0
 
         conditions: list[str] = []
-        signals: list[str] = []
+        # 这里的信号都是「条件已满足」的正面描述（多头排列 / MA20 支撑），一律 bullish
+        signals: list[RatingSignal] = []
         passed = True
 
         if ma5 > ma10 > ma20_now > ma60:
             conditions.append("均线多头排列 ✓")
-            signals.append("趋势-均线多头排列")
+            signals.append(RatingSignal("趋势-均线多头排列", "bullish"))
         else:
             conditions.append("均线非多头排列")
             passed = False
@@ -665,7 +683,9 @@ class RatingEngine:
         last_close = close.iloc[-1]
         if last_close > ma20_now:
             conditions.append("价格在MA20之上 ✓")
-            signals.append(f"趋势-MA20支撑: 收盘价{last_close:.2f}在MA20({ma20_now:.2f})之上")
+            signals.append(RatingSignal(
+                f"趋势-MA20支撑: 收盘价{last_close:.2f}在MA20({ma20_now:.2f})之上",
+                "bullish"))
         else:
             conditions.append("价格跌破MA20")
             passed = False
