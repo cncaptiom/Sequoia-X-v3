@@ -71,6 +71,16 @@
 
 **如何验证**：比对 `RATING_GROUPS`（9 键）与 `STRATEGY_CATEGORIES`（6 个类名），看交集有几个。
 
+> **2026-10-15 已按「划清边界 + 除隐患」处理**（不合并）：
+> - `reporter.py` 的 `label_map` 拆成 `_RATING_LABELS`（体系A）与 `_SELECTION_LABELS`（体系B）
+>   两张表，并去掉 `s.replace("Strategy","")` 兜底——它会把类名剥成 camelCase 的样子，
+>   正是「看起来像一套」的来源
+> - `main.py` 送进 `SignalGenerator` 的 `strategy_map` 不再虚构 `XxxStrategy` 名，
+>   直接传 camelCase 键（见 H2），两条流水线的名字空间从此分野明确
+> - README 顶部明确写出这是**两套互不相干的策略实现**，并各自说明驱动哪条链路
+>
+> 未做：合并成一套（需重写 `--daily`、多策略回测、`--factors` 三条链路，风险大）。
+
 ---
 
 ### 🔴 H2 — `main.py:721` 的策略名映射含 5 个不存在的类名
@@ -85,6 +95,14 @@
 **影响有限但已确认**：`generator.py` 里 `strategies` 只用于 `len()`（`:245`）、`"+".join()`（`:370`）、存进 `SignalTrade.strategies` 供显示，**从不按名字解析类**。所以不会报错，但飞书报告的策略标签会走 `reporter.py:149` 的 `s.replace("Strategy","")` 兜底，显示成 `MeanReversion`——**看起来像体系 B 的策略，实际是体系 A 的**。
 
 **如何验证**：`grep -rn "class MeanReversionStrategy" .` → 无结果。
+
+> **2026-10-15 已修**：`main.py` 里那张映射表整张删掉——`strategy_map` 直接送 camelCase
+> 键（`meanReversion` 等），不再翻译成虚构的类名。兜底值也从 `["RatingEngine"]` 改成
+> `["rating"]`，与 `reporter` 的 `_RATING_LABELS` 对得上。
+> 同源的两份拷贝也在 `run_confidence_diff.py:38` 与 `run_rating_vs_confidence.py:35`
+> —— 那两个是一次性诊断脚本，未改（`grep` 仍能命中，别误当成生产代码）。
+> **顺带的好处**：手机端的类别匹配用的就是 camelCase（`stock_detail_page.dart:764`），
+> 现在两边名字空间一致了。
 
 ---
 
@@ -108,6 +126,24 @@
 **注意**：`base.py:55` 注释写着「防止未来信息泄漏」——它只挡住了更晚日期的信息，没挡住这一条，会给人错误的安全感。
 
 **如何验证**：把开仓价改为「次日开盘价」，跑同一段历史，比较收益率差异。
+
+> **2026-10-15 实测**（全市场股票池、`TurtleTradeStrategy`、近一年；用新增的
+> `BacktestConfig.fill_mode` 跑同一份数据的 A/B）：
+>
+> | 指标 | 当日收盘成交（现状） | 次日开盘成交 | 变化 |
+> |---|---|---|---|
+> | 年化收益 | −18.6% | **−24.0%** | **−5.4pp** |
+> | 最大回撤 | −28.1% | −33.3% | −5.2pp |
+> | 夏普 | −1.48 | −1.82 | −0.33 |
+> | 胜率 | 30.1% | 30.7% | +0.5pp |
+> | 交易次数 | 239 | 313 | +74 |
+>
+> 即：**同一条策略，当日收盘成交把年化虚高了约 5.4 个百分点**，回撤也被美化 5.2pp、
+> 夏普美化 0.33。方向与预期一致（偏乐观），量级不小。
+>
+> 修法已就位：`BacktestConfig.fill_mode`（`"same_close"` / `"next_open"`），
+> 入参、出参、涨跌停约束都已按成交日重算；**默认值仍是 `same_close`（未改行为）**，
+> 切换需要产品决策。
 
 ---
 
@@ -225,6 +261,17 @@ def record_signals(self, signals, ...):
 | `eval/replay_scores.py:22` `TECH_KEYS` | camelCase | **5** |
 
 前两份靠 `IR_STRATEGY_MAP`（`engine.py:112`）手工对应。**风险**：往 `RATING_GROUPS` 加策略却忘了改 `STRATEGY_CATEGORIES`，`apply_regime` 不会给它设权重，而 `_combine_scores` 用「权重 > 0」过滤 → **静默丢弃，不报错**。
+
+> **2026-10-15 已修（第 1、2 份）**：
+> - `RatingConfig.RATING_GROUPS` 成为**唯一来源**（camelCase）；`STRATEGY_CATEGORIES`
+>   由 `_snake_categories(RATING_GROUPS, IR_STRATEGY_MAP)` 派生，不再手写
+> - `RatingEngine.RATING_GROUPS` 改为 `= RatingConfig.RATING_GROUPS`（同一对象，已测）
+> - 派生结果与原值逐类别一致（已用脚本比对）
+>
+> 未动：第 3 份 `ensemble.consensus.STRATEGY_CATEGORIES` 属于**体系B**（类名、6 个），
+> 与评级体系本就不是一回事（见 H1）；第 4 份 `eval/replay_scores.TECH_KEYS` 保留手写，
+> 但删掉了同文件里**从未被引用的** `KEY_ATTR`，并注明它必须与「启用且 replay 能算」的
+> 集合同步，否则回放校验会静默漏检。
 
 ### 🟡 M2 — 回测交易成本三处不一致
 
@@ -383,6 +430,12 @@ r.rating = self._calculate_rating(r.trend_passed, total)     # 定级用：未�
 
 **实测**：两者 Top15 **只重叠 2 只**；置信度最高的 94 只在评级体系里**中位排名 3435/4984**，仅 6 只进评级前 100。
 
+> **2026-10-15：暂时无法复测。** `confidence` 只存在于 COS 的 `priority/today.json`
+> 与飞书推送内容里，**没有落到任何本地文件**（`grep -l confidence output/*.json` 无结果），
+> 本地只有评级快照。要复测就得跑一次全市场信号生成，或把 `confidence` 加进评级快照的
+> 导出字段——后者是小改动，且能让以后所有涉及 D2 的核对不必重扫。
+> **在此之前，D2 的「重叠 2 只」仍是 10-13 旧权重下的数字。**
+
 ### D3 — 评级分布极端：87% 是 `avoid`（**已查明**）
 
 实测分布：`avoid=4348`(87%)、`watch=502`、`attention=101`、`buy=42`、`strong_buy=0`（全市场 4993 只）。
@@ -453,9 +506,22 @@ r.rating = self._calculate_rating(r.trend_passed, total)     # 定级用：未�
 > 上面这张表是在「2 策略权重（meanReversion + fundamental）」下得到的；
 > 去重后 next `--rating` 的权重会变成 4 个策略（见 D5），**这张表的数值随之失效**。
 
-### D4 — 「多策略共振 0.30 档」全市场从不触发
+### D4 — 「多策略共振 0.30 档」全市场从不触发（**2026-10-15 复测：已翻转**）
 
 实测多策略共振分布 `0.15=515 只，0.10=4469 只`——**没有一只有 ≥3 个策略**。`README.md` 说的「≥3 个策略选中满分」是永不发生的情况。
+
+> **2026-10-15 复测：从「永不触发」翻转成「全员触发」。** 当前快照
+> （`rating_result_20261014.json`，4993 只）里**每一只都恰好有 3 个策略**
+> （`meanReversion` + `kdj` + `fundamental`），于是 `len(strategies) >= 3`
+> （`generator.py:246`）对全市场成立 → 每只股票的「多策略共振」都是 **0.30 恒定值**。
+>
+> **成因是 D5**：此前 `fundamental` 被 IR 清零，活跃策略只有 2 个
+> （`meanReversion` + `kdj`），0.30 档触不到；D5 把 fundamental 恢复到 0.32 后活跃数变 3。
+> 两种状态都不对——一个永不触发，一个毫无区分度。
+>
+> **真正要改的是这个维度的设计**：`strategy_count = len(strategies)`，而「有几个策略
+> 有评分」完全由**权重配置**决定，不反映股票自身的信号强弱。要么改成按
+> 「原始分 > 0 的策略数」计，要么把这个维度删掉（它现在只是给所有人加同一个常数）。
 
 ### D5 — 权重由「噪声 IC 的符号」决定，不可复现（**最根本的一条**）
 

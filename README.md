@@ -28,10 +28,15 @@
 ```
 PC端 (每个交易日收盘后运行一次：手动跑 --rating，或装定时任务)
   ┌─ 全市场5000+只股票扫描
-  ├─ 6大选股策略 + 9大评级策略
+  ├─ 9大评级策略（体系A，rating/strategies.py）
   ├─ 按「评级类别 → 总分 → 置信度」排序取前15名生成操作建议
   ├─ 推送飞书 + 上传腾讯云COS
   └─ 手机端实时拉取数据
+
+⚠️ 项目里有**两套互不相干的策略实现**，别把它们当成一套：
+  · 体系A「评级策略」rating/strategies.py —— 9 个函数，驱动 --rating（生产）
+  · 体系B「选股策略」sequoia_x/strategy/*.py —— 6 个类，驱动 --daily 与回测
+  两者只有 maVolume / turtleTrade 两个名字重叠，而且是两份独立实现。
 
 手机端 (盘中9:30-15:00)
   ┌─ 实时显示PC端推荐股票
@@ -327,7 +332,7 @@ python main.py --install-schedule
 
 | 命令 | 功能 |
 |------|------|
-| `python main.py` | 日常模式（**备用回退路径**，生产实际跑的是 `--rating`）：增量更新 + 6策略选股 + 推送 |
+| `python main.py` | 日常模式（**备用回退路径**，生产实际跑的是 `--rating`）：增量更新 + 6策略选股（体系B）+ 推送 |
 | `python main.py --rating` | 评级模式：全市场9策略评分 + 前15名操作建议 |
 | `python main.py --backfill` | 串行回填（baostock） |
 | `python main.py --parallel-backfill` | 并行回填（baostock，8进程） |

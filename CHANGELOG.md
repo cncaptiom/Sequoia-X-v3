@@ -566,3 +566,84 @@ D5 在同一份快照内的效果很小（总分平均 +0.003、按总分排序�
 **遗留（展示层，未并入本次）**：`round(-0.03, 1)` 得到 `-0.0`，界面仍显示「总分 -0.0」。
 它与评级现已自洽（`-0.0 >= 0` → attention），但显示成 `-0.0` 本身不美观，
 是否归一成 `0.0` 另定。
+
+## 十四、D1 / D2 / D4 复测（2026-10-15）
+
+### D4 —— **从「永不触发」翻转成「全员触发」**
+
+10-13 台账记「多策略共振 0.30 档全市场 0 只触发」（当时分布 `0.15=515 / 0.10=4469`，
+没有一只有 ≥3 个策略）。当前快照（`rating_result_20261014.json`，4993 只）
+**每一只都恰好 3 个策略**（`meanReversion` + `kdj` + `fundamental`），于是
+`len(strategies) >= 3`（`generator.py:246`）对全市场成立 →
+每只股票的「多策略共振」都是 **0.30 恒定值**。
+
+**成因是 D5**：此前 `fundamental` 被 IR 清零，活跃策略只有 2 个（`meanReversion`
++ `kdj`），0.30 档触不到；D5 把 fundamental 恢复到 0.32 后活跃数变成 3。
+**两种状态都不对**——一个永不触发，一个毫无区分度。
+
+**根因是维度设计**：`strategy_count = len(strategies)`，而「有几个策略有评分」完全由
+**权重配置**决定，不反映股票自身信号强弱。应改成按「原始分 > 0 的策略数」计，
+或直接删掉这个维度（它现在只是给所有人加同一个常数）。
+
+### D1 —— 数字已变，机理仍在
+
+「总分 ≥1.5 的 446 只全被压 watch、进不了推送」→ 现在 **34 只，其中 2 只 `buy`**。
+但「总分高」与「趋势通过」在此权重下仍是负相关，机理未变。
+
+### D2 —— **暂时无法复测**
+
+`confidence` 只存在于 COS 的 `priority/today.json` 与飞书推送内容里，**没有落到任何
+本地文件**（`grep -l confidence output/*.json` 无结果）。复测 D2（评级 Top15 与置信度
+Top15 只重叠 2 只）需要跑一次全市场信号生成；更划算的是把 `confidence` 加进评级快照的
+导出字段。**在此之前，D2 的数字仍是 10-13 旧权重下的。**
+
+## 十五、H1/H2/M1：划清两套策略体系的边界并除隐患（2026-10-15）
+
+用户选定「**划清边界 + 除隐患**」，不做合并。
+
+### H2 — 删掉 5 个虚构的策略类名
+
+`main.py` 的 `strategy_key_map` 把 camelCase 键翻成 `MeanReversionStrategy` 之类，
+而 `strategy/` 下**根本没有这些类**。整张表删掉，`strategy_map` 直接送 camelCase 键；
+兜底值 `["RatingEngine"]` → `["rating"]`（与 reporter 的标签表对得上）。
+**顺带好处**：手机端类别匹配用的就是 camelCase（`stock_detail_page.dart:764`），
+两边名字空间从此一致。
+
+### H1 — 两套体系在报告层分开
+
+`reporter.py` 的 `label_map` 拆成 `_RATING_LABELS`（体系A：`rating/strategies.py`）
+与 `_SELECTION_LABELS`（体系B：`strategy/*.py`）两张表，并去掉
+`s.replace("Strategy","")` 兜底——它会把类名剥成 camelCase 的样子，正是「看起来像一套」
+的来源。README 顶部写明存在两套互不相干的实现及各自驱动哪条链路。
+
+### M1 — 类别表收敛到唯一来源
+
+- `RatingConfig.RATING_GROUPS` 成为**唯一来源**；`STRATEGY_CATEGORIES` 由
+  `_snake_categories(RATING_GROUPS, IR_STRATEGY_MAP)` 派生，不再手写第二份
+- `RatingEngine.RATING_GROUPS` 改为直接引用同一对象（已验证是同一对象）
+- 派生结果与原值逐类别一致（脚本比对通过）
+- 未动 `ensemble.consensus.STRATEGY_CATEGORIES`（属体系B）与
+  `eval/replay_scores.TECH_KEYS`（保留手写，但删掉同文件里**从未被引用**的 `KEY_ATTR`，
+  并注明同步要求，否则回放校验会静默漏检）
+
+消除的正是 M1 写的那个风险：往 `RATING_GROUPS` 加策略却忘改另一张表 →
+`apply_regime` 不设权重 → `_combine_scores` 按「权重 > 0」过滤 → **静默丢弃，不报错**。
+
+## 十六、H3 对照实验：当日收盘成交把年化虚高约 5.4pp（2026-10-15）
+
+`backtest/engine.py` 原本用同一根 K 线的收盘价既算信号又成交——A 股没有 MOC 指令，
+不可执行。新增 `BacktestConfig.fill_mode`：`same_close`（默认 = 原行为）/ `next_open`，
+成交价、成交日期、涨跌停约束全部按成交日重算。**默认值未改。**
+
+全市场、`TurtleTradeStrategy`、近一年：
+
+| 指标 | 当日收盘 | 次日开盘 | 变化 |
+|---|---|---|---|
+| 年化收益 | −18.6% | −24.0% | **−5.4pp** |
+| 最大回撤 | −28.1% | −33.3% | −5.2pp |
+| 夏普 | −1.48 | −1.82 | −0.33 |
+| 胜率 | 30.1% | 30.7% | +0.5pp |
+| 交易次数 | 239 | 313 | +74 |
+
+结论：**引擎跑出的任何正向结果都要按这个量级打折扣**；「选股无优势」的既有结论因此更稳。
+是否把默认切成 `next_open` 待定。

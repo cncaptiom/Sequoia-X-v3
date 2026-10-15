@@ -143,14 +143,25 @@ class ReportGenerator:
             else:
                 level = "D"
 
-            # 策略标签
+            # 策略标签。⚠️ 这个字段会被两条流水线写入，名字来自【两套不同的策略体系】：
+            #   · --rating（生产）→ rating/strategies.py，键为 camelCase（maVolume…kdj）
+            #   · --daily（备用）→ strategy/*.py，键为类名（MaVolumeStrategy…）
+            # 两套实现互不相干、名字部分重叠，所以两张表**分开列**，不再合成一个 dict
+            # 让人以为是一套。也去掉了 `s.replace("Strategy","")` 兜底——它会把类名
+            # 剥成 camelCase 的样子，看起来像另一套体系的策略。
+            _RATING_LABELS = {
+                "maVolume": "均线放量", "turtleTrade": "海龟突破", "meanReversion": "均值回归",
+                "volumePrice": "量价关系", "atrChannel": "ATR通道", "macdRsi": "MACD+RSI",
+                "maCross": "MA金叉", "kdj": "KDJ", "fundamental": "基本面", "rating": "综合评级",
+            }
+            _SELECTION_LABELS = {
+                "MaVolumeStrategy": "均线放量", "TurtleTradeStrategy": "海龟突破",
+                "HighTightFlagStrategy": "高紧旗", "LimitUpShakeoutStrategy": "涨停洗盘",
+                "UptrendLimitDownStrategy": "上涨跌停", "RpsBreakoutStrategy": "RPS突破",
+            }
             strat_labels = []
-            label_map = {"maVolume": "均线放量", "turtleTrade": "海龟突破", "highTightFlag": "高紧旗",
-                "limitUpShakeout": "涨停洗盘", "uptrendLimitDown": "上涨跌停", "rpsBreakout": "RPS突破",
-                "maCross": "MA金叉", "meanReversion": "均值回归", "volumePrice": "量价关系",
-                "atrChannel": "ATR通道", "macdRsi": "MACD+RSI", "rating": "综合评级"}
             for s in sig.strategies:
-                lbl = label_map.get(s, s.replace("Strategy", ""))
+                lbl = _RATING_LABELS.get(s) or _SELECTION_LABELS.get(s) or s
                 strat_labels.append(f"#{lbl}")
             strat_tags = " | ".join(strat_labels)
 

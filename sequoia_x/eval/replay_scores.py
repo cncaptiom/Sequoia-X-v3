@@ -18,15 +18,11 @@ from sequoia_x.rating.strategies import (
     turtle_trade_strategy,
 )
 
-# 启用策略的评分键（与 engine.RATING_GROUPS / IR_STRATEGY_MAP 的 camelCase 名一致）
+# 参与校验的技术类策略（与 engine.RATING_GROUPS 的 camelCase 名一致）。
+# ⚠️ 必须与 RatingConfig 里【启用且 replay 能算】的策略集合保持一致——
+# 生产新启用了技术类策略却忘了加到这里，回放校验会**静默漏检**（见 M1）。
+# fundamental 不在其中：历史回放拿不到当时的财报数据。
 TECH_KEYS = ["turtleTrade", "meanReversion", "atrChannel", "maCross", "kdj"]
-KEY_ATTR = {
-    "turtleTrade": "turtle_trade",
-    "meanReversion": "mean_reversion",
-    "atrChannel": "atr_channel",
-    "maCross": "ma_cross",
-    "kdj": "kdj",
-}
 
 
 def _rsi_series(close: pd.Series, period: int = 14) -> pd.Series:

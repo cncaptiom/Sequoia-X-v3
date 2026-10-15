@@ -33,6 +33,11 @@ class BacktestConfig:
     max_hold_days: int = 20                     # 最长持仓天数
     min_bars: int = 30                          # 最少需要的历史K线
     benchmark_symbol: str = "sh.000300"         # 基准：沪深300
+    # 成交时点：
+    #   "same_close" = 信号当日收盘价成交（历史实现）。信号是拿当日收盘算出来的，
+    #                  当天就用同一个收盘价成交在实盘里做不到——见 H3 未来函数。
+    #   "next_open"  = 信号次日开盘价成交（可执行）。
+    fill_mode: str = "same_close"
 
 
 # ── 交易记录 ──
@@ -242,15 +247,19 @@ class BacktestEngine:
                     elif hold_days >= cfg.max_hold_days:
                         exit_reason = "time_exit"
 
-                    # A股执行约束：跌停封死时无法卖出，持仓顺延到下一交易日
-                    if exit_reason and len(df_cut) >= 2:
-                        prev_close = float(df_cut["close"].iloc[-2])
-                        limit_down = round(prev_close * (1 - self._limit_pct(sym)), 2)
-                        if current_price <= limit_down + 0.001:
-                            continue
-
+                    # A股执行约束：成交价一字跌停则卖不出，持仓顺延到下一交易日
                     if exit_reason:
-                        exit_price = current_price * (1 - cfg.slippage)
+                        fill = self._fill(df_sym, current_date)
+                        if fill is None:
+                            continue
+                        exit_date, fill_price = fill
+                        prev_rows = df_sym[df_sym["date"] < exit_date]
+                        if not prev_rows.empty:
+                            prev_close = float(prev_rows["close"].iloc[-1])
+                            limit_down = round(prev_close * (1 - self._limit_pct(sym)), 2)
+                            if fill_price <= limit_down + 0.001:
+                                continue
+                        exit_price = fill_price * (1 - cfg.slippage)
                         # 平仓：收回本金+盈亏（扣卖出佣金与印花税），与开仓时扣除的成本对应
                         entry_cost = pos["entry_price"] * pos["quantity"] * (1 + cfg.commission)
                         proceeds = exit_price * pos["quantity"]
@@ -260,7 +269,7 @@ class BacktestEngine:
                         trades.append(Trade(
                             symbol=sym,
                             entry_date=pos["entry_date"],
-                            exit_date=current_date,
+                            exit_date=exit_date,
                             entry_price=pos["entry_price"],
                             exit_price=exit_price,
                             quantity=pos["quantity"],
@@ -283,24 +292,25 @@ class BacktestEngine:
                     if sym not in all_data:
                         continue
                     df_sym = all_data[sym]
-                    df_cut = df_sym[df_sym["date"] <= current_date]
-                    if df_cut.empty:
+                    fill = self._fill(df_sym, current_date)
+                    if fill is None:
                         continue
-                    current_price = float(df_cut["close"].iloc[-1])
-                    # A股执行约束：涨停封死时无法买入
-                    if len(df_cut) >= 2:
-                        prev_close = float(df_cut["close"].iloc[-2])
+                    fill_date, fill_price = fill
+                    # A股执行约束：成交价一字涨停则买不进
+                    prev_rows = df_sym[df_sym["date"] < fill_date]
+                    if not prev_rows.empty:
+                        prev_close = float(prev_rows["close"].iloc[-1])
                         limit_up = round(prev_close * (1 + self._limit_pct(sym)), 2)
-                        if current_price >= limit_up - 0.001:
+                        if fill_price >= limit_up - 0.001:
                             continue
-                    entry_price = current_price * (1 + cfg.slippage)
+                    entry_price = fill_price * (1 + cfg.slippage)
                     position_value = capital * cfg.position_size_pct
                     quantity = max(int(position_value / entry_price / 100) * 100, 100)
                     cost = entry_price * quantity * (1 + cfg.commission)
                     if cost > 0 and cost <= capital:  # 现金足够才开仓，并即时扣除成本
                         capital -= cost
                         positions[sym] = {
-                            "entry_date": current_date,
+                            "entry_date": fill_date,
                             "entry_price": entry_price,
                             "quantity": quantity,
                         }
@@ -357,6 +367,26 @@ class BacktestEngine:
             f"最大回撤{result.max_drawdown:.1%}"
         )
         return result
+
+    def _fill(self, df_sym: pd.DataFrame,
+              current_date: str) -> tuple[str, float] | None:
+        """按 `fill_mode` 给出成交日与成交价。
+
+        same_close：当日收盘价（历史实现）。信号本身就是拿当日收盘算出来的，
+        当天以同一收盘价成交是前视——见 H3。
+        next_open：下一交易日开盘价。
+
+        返回 None 表示没有可成交的 bar（该股此时还没有数据，或已到区间末尾）。
+        """
+        df_cut = df_sym[df_sym["date"] <= current_date]
+        if df_cut.empty:
+            return None
+        if self.config.fill_mode != "next_open":
+            return current_date, float(df_cut["close"].iloc[-1])
+        df_next = df_sym[df_sym["date"] > current_date]
+        if df_next.empty:
+            return None
+        return str(df_next["date"].iloc[0]), float(df_next["open"].iloc[0])
 
     @staticmethod
     def _limit_pct(symbol: str) -> float:

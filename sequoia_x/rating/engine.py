@@ -34,6 +34,16 @@ from sequoia_x.signal.quality import winsorize, standardize
 logger = get_logger(__name__)
 
 
+def _snake_categories(groups: dict[str, list[str]],
+                      name_map: dict[str, str]) -> dict[str, list[str]]:
+    """把「类别 → [camelCase]」转成「类别 → [snake_case]」。
+
+    写成模块级函数而不是类内推导式，是因为 Python 3 的推导式在类体里
+    看不到类作用域的名字。
+    """
+    return {cat: [name_map[m] for m in members] for cat, members in groups.items()}
+
+
 # ── 配置 ──
 
 @dataclass
@@ -89,12 +99,28 @@ class RatingConfig:
     weight_fundamental: float = 0.20
 
     # ── 策略类别与市场状态权重映射 ──
-    # 各策略所属类别
-    STRATEGY_CATEGORIES = {
-        "trend": ["ma_volume", "turtle_trade", "atr_channel"],
-        "momentum": ["macd_rsi", "ma_cross"],
-        "reversal": ["mean_reversion", "volume_price", "kdj"],
+    # 【唯一来源】策略类别表（camelCase）。`STRATEGY_CATEGORIES` 由它派生，
+    # `RatingEngine.RATING_GROUPS` 也直接引用它。
+    # 原先这三处各写一遍，风险是：往一张表加了策略却忘了同步另一张 →
+    # `apply_regime` 不会给它设权重，而 `_combine_scores` 按「权重 > 0」过滤
+    # → **静默丢弃，不报错**。
+    RATING_GROUPS = {
+        "trend": ["maVolume", "turtleTrade", "atrChannel"],
+        "momentum": ["macdRsi", "maCross"],
+        "reversal": ["meanReversion", "volumePrice", "kdj"],
         "fundamental": ["fundamental"],
+    }
+    # camelCase（ICTracker / 评分名）→ snake_case（WEIGHT_ATTRS 的键）
+    IR_STRATEGY_MAP = {
+        "maVolume": "ma_volume",
+        "turtleTrade": "turtle_trade",
+        "meanReversion": "mean_reversion",
+        "volumePrice": "volume_price",
+        "atrChannel": "atr_channel",
+        "macdRsi": "macd_rsi",
+        "maCross": "ma_cross",
+        "kdj": "kdj",
+        "fundamental": "fundamental",
     }
     # 策略权重属性名映射
     WEIGHT_ATTRS = {
@@ -108,18 +134,8 @@ class RatingConfig:
         "kdj": "weight_kdj",
         "fundamental": "weight_fundamental",
     }
-    # ICTracker 策略名 → WEIGHT_ATTRS 键名映射
-    IR_STRATEGY_MAP = {
-        "maVolume": "ma_volume",
-        "turtleTrade": "turtle_trade",
-        "meanReversion": "mean_reversion",
-        "volumePrice": "volume_price",
-        "atrChannel": "atr_channel",
-        "macdRsi": "macd_rsi",
-        "maCross": "ma_cross",
-        "kdj": "kdj",
-        "fundamental": "fundamental",
-    }
+    # 由上面两张同源表派生，不再手写第二份
+    STRATEGY_CATEGORIES = _snake_categories(RATING_GROUPS, IR_STRATEGY_MAP)
     # 各市场状态下策略类别的偏向权重：唯一来源是 sequoia_x.regime.REGIME_BIAS，
     # 那里同时供 RegimeResult.strategy_bias 展示，避免两套口径打架。
     REGIME_BIAS = _REGIME_BIAS
@@ -359,14 +375,9 @@ class AnalysisResult:
 class RatingEngine:
     """评级引擎：全市场 A 股评级筛选核心。"""
 
-    # 唯一策略分类（与 RatingConfig.STRATEGY_CATEGORIES 同构，键为评分用的 camelCase 名）
-    # 评分、类别展示、正交化均以此为准
-    RATING_GROUPS = {
-        "trend": ["maVolume", "turtleTrade", "atrChannel"],
-        "momentum": ["macdRsi", "maCross"],
-        "reversal": ["meanReversion", "volumePrice", "kdj"],
-        "fundamental": ["fundamental"],
-    }
+    # 唯一策略分类：**直接引用 RatingConfig 的那一份**，别再写第二遍
+    # （原先 RatingConfig 与 RatingEngine 各写一遍，加策略忘同步就会静默丢权重）
+    RATING_GROUPS = RatingConfig.RATING_GROUPS
 
     def __init__(self, config: Optional[RatingConfig] = None,
                  data_engine=None):

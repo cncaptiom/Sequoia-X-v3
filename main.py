@@ -730,20 +730,15 @@ def _run_rating(settings, logger, engine, notifier) -> None:
 
     if candidates:
         # 构建 strategy_map: {symbol: [positive_score_strategies]}
+        # 直接传 rating/strategies.py 的 camelCase 键（`_run_daily` 那条路径传的是
+        # strategy/*.py 的类名，两条流水线的名字空间不同，见 reporter 的说明）。
+        # 此前这里会把键翻译成 "MeanReversionStrategy" 之类的名字，而 strategy/ 下
+        # **根本没有这些类**——纯属虚构，只会让报告看起来像另一套体系的策略。
         strategy_map = {}
-        strategy_key_map = {
-            "maVolume": "MaVolumeStrategy", "turtleTrade": "TurtleTradeStrategy",
-            "meanReversion": "MeanReversionStrategy", "volumePrice": "VolumePriceStrategy",
-            "atrChannel": "AtrChannelStrategy", "macdRsi": "MacdRsiStrategy",
-            "maCross": "MaCrossStrategy",
-        }
         for r in candidates:
-            trigger_strats = []
-            for sk, sv in r.strategy_scores.items():
-                if sv > 0:
-                    trigger_strats.append(strategy_key_map.get(sk, sk))
+            trigger_strats = [sk for sk, sv in r.strategy_scores.items() if sv > 0]
             if not trigger_strats:
-                trigger_strats = ["RatingEngine"]
+                trigger_strats = ["rating"]
             strategy_map[r.symbol] = trigger_strats
 
         # 使用 SignalGenerator 生成完整TradeSignal（优先方案）
