@@ -829,3 +829,30 @@ H4 补上 `_run_rating` 的 `record_signals` 后，从 10-13 起才会按日累�
 
 **因此停下等你定**：是接受「改完不能验证」先做 ④（纯本地标签改造）和 ⑥，
 还是等能跑 Flutter 的环境再一起做？
+
+## 二十三、手机端 ④：本地分数不再冒充 PC 的 S/A/B 标签（2026-10-15）
+
+用户选定先做 ④（自包含那一项）。改动：
+
+- **`home_page.dart` 推荐卡片**：新增 `hasPc` 判断（卡片本来就会去查 PC 评级，
+  所以能判断这个分数是 PC 的还是本地算的）。PC 缺失时档位标签由 `S/A/B/C`
+  改为 **`本地优` / `本地中` / `本地弱`**
+- **`stock_detail_page.dart` 的 `_buildDecisionCard`**：本来就有 `hasPc`；
+  PC 缺失时 `label` 改为 **`本地估算`**、去掉星级（星级是 PC 分位的表达，
+  本地分没有对应标定），评级配色改为中性灰，不再套用 PC 的档位配色
+- 顺带：同一文件 `_buildPicksSummary` 里的字面量 `1.5/1.0/0.5` 改用
+  `AppTheme.scoreS/A/B` 常量（此前改阈值漏改这处，会让统计行与卡片等级对不上）
+
+**为什么要这么做**：本地 `totalScore` 是「原始整数分 × 权重」的加权和，PC 是截面 Z 分，
+两者不是同一把尺子（`docs/mobile-datalayer-review-2026-10-15.md` 第 1 条）。
+共用 `1.5/1.0/0.5` 阈值意味着离线时会按 PC 的档位显示一个「S级」，
+而那个 S 与 PC 的 S 毫无关系。
+
+**验证**：`dart analyze lib/` → **0 error / 0 warning**（195 条均为既有 info 级 lint）；
+`dart format` 对 `home_page.dart` 干净、`stock_detail_page.dart` 只剩两处与本次无关的旧漂移。
+**但没有运行 App 看实际渲染**——本机 `flutter --version` 会尝试联网取 tags 而失败，
+也没有可用设备/模拟器。**视觉效果需你构建后确认。**
+
+**遗留**：`_buildDecisionCard` 里建仓/关注/观望的分支仍在用 PC 阈值判本地分，
+这次只改了标签与配色（已在代码里标注）。②合并口径与 ⑥regimeWeights 未做——
+前者需要 PC 导出补 `signals` 字段，后者需要手机端新解析 `strategy_bias`。

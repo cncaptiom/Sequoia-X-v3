@@ -365,12 +365,12 @@ class StockDetailPage extends StatelessWidget {
     // — 提取数据（PC端优先） —
     final bool hasPc = pcRating != null;
     final String ratingStr = hasPc ? (pcRating.rating as String? ?? '') : '';
-    final String label = hasPc
-        ? (pcRating.ratingLabel as String? ?? '')
-        : (analysis?.ratingLabel ?? '');
-    final String stars = hasPc
-        ? (pcRating.ratingStars as String? ?? '')
-        : (analysis?.ratingStars ?? '');
+    // 本地离线分数与 PC 截面分不是同一把尺子（见
+    // docs/mobile-datalayer-review-2026-10-15.md 第 1 条），**不能复用 PC 的 S/A/B 标签**：
+    // PC 缺失时改用「本地估算」，并去掉星级（星级是 PC 分位的表达，本地分没有对应标定）。
+    final String label =
+        hasPc ? (pcRating.ratingLabel as String? ?? '') : '本地估算';
+    final String stars = hasPc ? (pcRating.ratingStars as String? ?? '') : '';
     final double score = hasPc
         ? ((pcRating.totalScore as num?)?.toDouble() ?? 0)
         : (analysis?.totalScore ?? 0);
@@ -402,13 +402,18 @@ class StockDetailPage extends StatelessWidget {
       }
     }
 
-    // 评级判定（用评分阈值代替字符串匹配，对齐全市场评分分布）
-    // S: >=1.5(前0.2%)  A: >=1.0(前7%)  B: >=0.5(前28%)
+    // 评级判定。
+    // PC 口径：S >=1.5(前0.2%) / A >=1.0(前7%) / B >=0.5(前28%)，颜色对齐全站
+    // （红=强买入、橙=买入、琥珀=持有、灰=普通）。
+    // 本地分没有自己的标定，**不套用这套档位配色**，只给中性色。
+    // ⚠️ 遗留：下面的建仓/关注/观望分支仍在用同一套 PC 阈值判本地分，
+    // 这一层尚未处理（见 docs/mobile-datalayer-review-2026-10-15.md）。
     bool isTop = score >= AppTheme.scoreA; // 前7%的股票
     bool isAvoid = ratingStr == 'avoid';
-    // S/A/B/C 颜色对齐全站（红=强买入、橙=买入、琥珀=持有、灰=普通），S级醒目区分于A级
     Color ratingColor;
-    if (score >= AppTheme.scoreS) {
+    if (!hasPc) {
+      ratingColor = AppTheme.textHint;
+    } else if (score >= AppTheme.scoreS) {
       ratingColor = AppTheme.gradeS;
     } else if (score >= AppTheme.scoreA) {
       ratingColor = AppTheme.gradeA;

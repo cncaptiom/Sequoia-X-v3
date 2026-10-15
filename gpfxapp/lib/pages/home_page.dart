@@ -254,11 +254,15 @@ class _HomePageState extends State<HomePage>
     int s = 0, a = 0, b = 0, sustained = 0;
     for (final p in picks) {
       final sc = (p.totalScore as num?)?.toDouble() ?? 0;
-      if (sc >= 1.5)
+      // 用 AppTheme 的常量，别再写字面量——同一文件里卡片定级用的是常量，
+      // 改阈值时漏改这边会让统计行与卡片等级对不上。
+      if (sc >= AppTheme.scoreS) {
         s++;
-      else if (sc >= 1.0)
+      } else if (sc >= AppTheme.scoreA) {
         a++;
-      else if (sc >= 0.5) b++;
+      } else if (sc >= AppTheme.scoreB) {
+        b++;
+      }
       final cd = (p.consecutiveDays as num?)?.toInt() ?? 1;
       if (cd >= _sustainedMinDays) sustained++;
     }
@@ -364,22 +368,47 @@ class _HomePageState extends State<HomePage>
       BuildContext context, dynamic pick, dynamic pcProvider) {
     final score = (pick.totalScore as num?)?.toDouble() ?? 0;
 
-    // 置信度等级（阈值基于全市场评分分布校准）
-    // S: 前0.2% (>=1.5分), A: 前7% (>=1.0分), B: 前28% (>=0.5分), C: 其余
+    // 这一卡显示的是 PC 口径的分，还是手机端离线估算的分？
+    // 卡片下面本来就要去查 PC 评级，所以这里能直接判断。
+    final hasPc = pcProvider.getRating(pick.symbol) != null;
+
+    // 档位标签。
+    //
+    // **本地分数不能复用 S/A/B**：本地 totalScore 是「原始整数分 × 权重」的加权和，
+    // 而 PC 是截面 Z 分，两者不是同一把尺子，阈值相近纯属巧合——
+    // 见 docs/mobile-datalayer-review-2026-10-15.md 第 1 条。
+    // 所以 PC 缺失时用独立命名 + 「本地」前缀，避免用户把两者当成一回事。
+    //
+    // 注：本地这三档的阈值仍是借用 PC 的（1.5 / 0.5），本地没有自己的标定；
+    // 至少标签不再冒充 PC 的 S/A/B。
     String level;
     Color levelColor;
-    if (pick.totalScore >= AppTheme.scoreS) {
-      level = "S";
-      levelColor = AppTheme.signalBuy;
-    } else if (pick.totalScore >= AppTheme.scoreA) {
-      level = "A";
-      levelColor = AppTheme.gradeA;
-    } else if (pick.totalScore >= AppTheme.scoreB) {
-      level = "B";
-      levelColor = AppTheme.signalHold;
+    if (hasPc) {
+      // PC 口径：S 前0.2%(>=1.5) / A 前7%(>=1.0) / B 前28%(>=0.5) / C 其余
+      if (score >= AppTheme.scoreS) {
+        level = "S";
+        levelColor = AppTheme.signalBuy;
+      } else if (score >= AppTheme.scoreA) {
+        level = "A";
+        levelColor = AppTheme.gradeA;
+      } else if (score >= AppTheme.scoreB) {
+        level = "B";
+        levelColor = AppTheme.signalHold;
+      } else {
+        level = "C";
+        levelColor = AppTheme.textHint;
+      }
     } else {
-      level = "C";
-      levelColor = AppTheme.textHint;
+      if (score >= AppTheme.scoreS) {
+        level = "本地优";
+        levelColor = AppTheme.gradeA;
+      } else if (score >= AppTheme.scoreB) {
+        level = "本地中";
+        levelColor = AppTheme.signalHold;
+      } else {
+        level = "本地弱";
+        levelColor = AppTheme.textHint;
+      }
     }
 
     // 获取完整PC评级数据

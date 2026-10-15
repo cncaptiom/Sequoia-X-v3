@@ -85,12 +85,41 @@
 
 ---
 
-## 建议的处理顺序（未执行）
+## 处理进展（2026-10-15）
 
-1. **第 1、2 条**是根因：本地分数与 PC 分数不是同一把尺子。要么让本地引擎改用与 PC
-   相同的口径（含 fundamental），要么**本地分数不要复用 S/A/B 标签**——单独一套命名，
-   并在界面上标明「本地估算」。
-2. 第 3、7 条是同一类：合并时两个字段来自不同源。合并要么整体用 PC、要么整体用本地。
-3. 第 4、6 条是小的收敛：阈值统一到 `AppTheme` 常量；`macdRsiEnabled` 默认值对齐。
-4. 第 5 条：手机端的 `regimeWeights` 要么删掉（PC 已同步 `strategy_bias`），
-   要么改成从 PC 同步。
+用户选定：①本地分数不复用 S/A/B（选小的改法）、②合并口径、③删 regimeWeights，
+但执行时发现 ②③ 比原设想复杂，**本轮只做了 ①**。
+
+### ✅ 已做：本地分数不再复用 PC 的 S/A/B 标签
+
+- `home_page.dart` 的推荐卡片：新增 `hasPc` 判断（卡片本来就会去查 PC 评级），
+  PC 缺失时档位标签改为 **`本地优` / `本地中` / `本地弱`**，不再显示 S/A/B
+- `stock_detail_page.dart` 的 `_buildDecisionCard`：本来就有 `hasPc`；
+  PC 缺失时 `label` 改为 **`本地估算`**、去掉星级（星级是 PC 分位的表达），
+  评级配色改为中性灰，不再套用 PC 的档位配色
+- 顺带修了同一文件里 `_buildPicksSummary` 用字面量 `1.5/1.0/0.5` 的问题，
+  改用 `AppTheme.scoreS/A/B` 常量（此前改阈值漏改这处会让统计行与卡片等级对不上）
+
+**验证**：`dart analyze lib/` → **0 error / 0 warning**（195 条均为既有 info 级 lint）；
+`dart format` 对 `home_page.dart` 干净、`stock_detail_page.dart` 只剩两处**与本次无关**
+的旧漂移。**但没有运行 App 看实际渲染**——本机 `flutter --version` 会尝试联网取 tags
+而失败，没有可用设备/模拟器。
+
+### ⏳ 未做：②合并口径、③regimeWeights
+
+两项都比原选项复杂，需要先补前提：
+
+- **②（合并整体用 PC）**：手机端 `analysis.signals` 是 `List<Signal>`（带
+  `bullish/bearish` 类型），而 PC 的 `PcRatingResult.signals` 是 `List<String>`，
+  且 **PC 的评级导出里根本没有 `signals` 字段**——照原方案切过去会把信号清空。
+  需要先：PC 导出补 `signals`，手机端再把字符串按关键词映射回 `Signal` 对象
+- **③（删 regimeWeights）**：需要手机端新解析 `strategy_bias`（`main.py:216` 已上传，
+  但手机端全库没有任何地方读它），还要补类别名映射
+  （PC 的 `trend` / `momentum` / `reversal` / `fundamental` ↔ 手机端的 趋势 / 动量 / 反转）
+
+### 仍遗留
+
+- `_buildDecisionCard` 里**建仓/关注/观望**的分支仍在用 PC 阈值判本地分——
+  这次只改了标签与配色，那一层没动（已在代码里标注）
+- 见第 6 条：`macdRsiEnabled` 默认值与 PC 相反
+
