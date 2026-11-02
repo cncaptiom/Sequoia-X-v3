@@ -36,11 +36,13 @@ class ReportGenerator:
             print("=" * 78)
             return
 
-        for i, sig in enumerate(result.top_n(20), 1):
+        for i, sig in enumerate(result.signals[:20], 1):
             rr = sig.risk_reward_ratio()
             print()
-            print(f"  ┌─ #{i}  {sig.name} ({sig.symbol}) {'★' * int(sig.confidence * 5)}")
+            print(f"  ┌─ #{i}  {sig.name} ({sig.symbol}) {sig.rating_stars}")
             print(f"  │  策略: {', '.join(sig.strategies)}")
+            if sig.rating_label:
+                print(f"  │  评级: {sig.rating_label}")
             print(f"  │  现价: {sig.current_price:.2f}")
             print(f"  │  ─────────────────────────────────────────────")
             print(f"  │  买入区间: {sig.entry_zone_low:.2f} ~ {sig.entry_zone_high:.2f}")
@@ -53,7 +55,7 @@ class ReportGenerator:
             print(f"  │  建议仓位: {sig.suggested_position_pct:.1%}")
             if sig.atr_value:
                 print(f"  │  ATR波动: {sig.atr_value:.2f}")
-            print(f"  │  置信度: {sig.confidence:.0%}")
+            print(f"  │  形态分: {sig.confidence:.0%}")
             print(f"  │  理由: {sig.rationale}")
             print(f"  └─")
 
@@ -69,7 +71,7 @@ class ReportGenerator:
             logger.warning("未配置飞书通知器，跳过推送")
             return
 
-        top = result.top_n(DISPLAY_TOP_N)
+        top = result.signals[:DISPLAY_TOP_N]
         if not top:
             # 无推荐时仍然推送简版报告
             logger.info("无推荐信号，推送空报告")
@@ -114,7 +116,7 @@ class ReportGenerator:
                 if v > 0:
                     parts.append(f"{label_map.get(k, k)} {v}")
             if parts:
-                rating_line = "\n评级分布: " + " | ".join(parts)
+                rating_line = "\n全市场评级分布: " + " | ".join(parts)
 
         overview = (
             f"**{today}** | 市场状态: {result.market_regime}"
@@ -130,18 +132,8 @@ class ReportGenerator:
             rr = sig.risk_reward_ratio()
             emoji = "🟢" if rr >= 2.0 else "🟡" if rr >= 1.0 else "🔴"
 
-            # 置信度等级
-            conf = sig.confidence
-            if conf >= 0.75:
-                level = "S"
-            elif conf >= 0.60:
-                level = "A"
-            elif conf >= 0.45:
-                level = "B"
-            elif conf >= 0.25:
-                level = "C"
-            else:
-                level = "D"
+            # 评级标签：选股依据。--daily（备用路径）不产生评级，留空。
+            rating_tag = f"  [{sig.rating_label}]" if sig.rating_label else ""
 
             # 策略标签。⚠️ 这个字段会被两条流水线写入，名字来自【两套不同的策略体系】：
             #   · --rating（生产）→ rating/strategies.py，键为 camelCase（maVolume…kdj）
@@ -166,7 +158,7 @@ class ReportGenerator:
             strat_tags = " | ".join(strat_labels)
 
             content = (
-                f"{emoji} **{i}. {name} ({sig.symbol})**  [Lv.{level}]\n"
+                f"{emoji} **{i}. {name} ({sig.symbol})**{rating_tag}\n"
                 f"{strat_tags}\n"
                 f"━━━━━━━━━━━━━━━━━\n"
                 f"**📥 买入区间：** {sig.entry_zone_low:.2f} ~ {sig.entry_zone_high:.2f}\n"
@@ -176,7 +168,7 @@ class ReportGenerator:
                 content += f" → {sig.take_profit_2:.2f}"
             content += f"\n**🛑 止损价：** {sig.stop_loss:.2f}"
             content += f"\n━━━━━━━━━━━━━━━━━\n"
-            content += f"盈亏比 {rr} | 仓位 {sig.suggested_position_pct:.0%} | 置信度 {sig.confidence:.0%}\n"
+            content += f"盈亏比 {rr} | 仓位 {sig.suggested_position_pct:.0%} | 形态分 {sig.confidence:.0%}\n"
             if sig.atr_value:
                 content += f"ATR波动 {sig.atr_value:.2f} | "
             content += f"现价 {sig.current_price:.2f}\n"
@@ -185,9 +177,9 @@ class ReportGenerator:
             reasons = []
             if sig.rationale:
                 reasons.append(sig.rationale)
-            # 置信度等级解读
-            level_hints = {"S": "多策略共振+趋势强", "A": "多策略确认", "B": "个别策略触发", "C": "信号偏弱", "D": "不参与"}
-            reasons.append(f"评级: {level_hints.get(level, '')}")
+            if sig.rating_label:
+                reasons.append(f"评级 {sig.rating_label}")
+            reasons.append(f"形态分 {sig.confidence:.0%}：走势质量，不参与选股排序")
             # 市场环境
             if result.market_regime:
                 reasons.append(f"当前市场: {result.market_regime}")

@@ -533,7 +533,7 @@ class _HomePageState extends State<HomePage>
                             fontWeight: FontWeight.bold,
                             color: levelColor)),
                   ),
-                  // 置信度（与飞书排序依据一致，>0 才显示）
+                  // 形态分（解释性指标，不参与选股排序；>0 才显示）
                   if (((pick.confidence as num?)?.toDouble() ?? 0) > 0) ...[
                     const SizedBox(width: 4),
                     Container(
@@ -544,7 +544,7 @@ class _HomePageState extends State<HomePage>
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
-                          '${(((pick.confidence as num?)?.toDouble() ?? 0) * 100).round()}%',
+                          '形态${(((pick.confidence as num?)?.toDouble() ?? 0) * 100).round()}%',
                           style: const TextStyle(
                               fontSize: 9, color: AppTheme.textHint)),
                     ),

@@ -71,7 +71,7 @@ class PcDataProvider extends ChangeNotifier {
   /// PC端评级数据是否已加载
   bool get hasRatings => _ratingsMap.isNotEmpty;
 
-  /// 完整操作信号列表（含置信度/仓位/理由）
+  /// 完整操作信号列表（含形态分/仓位/理由）
   PcSignalList? get signals => _signals;
 
   /// 获取指定股票的完整操作信号

@@ -186,31 +186,13 @@ class CosUploader:
             logger.warning("无信号数据，跳过")
             return False
 
-        # 按置信度降序排列
-        sorted_signals = sorted(signals, key=lambda s: s.confidence, reverse=True)
-
+        # 保持调用方传入的顺序（生产为「评级 → 总分 → 形态分」），
+        # 不再按形态分重排，避免展示顺序与选股依据不一致。
         signal_list = []
-        for s in sorted_signals:
+        for s in signals:
             entry_mid = (s.entry_zone_low + s.entry_zone_high) / 2
             risk_pct = round((s.current_price - s.stop_loss) / s.current_price * 100, 1) if s.stop_loss > 0 else 0
             reward_pct = round((s.take_profit_1 - s.current_price) / s.current_price * 100, 1) if s.take_profit_1 > 0 else 0
-
-            # 置信度等级
-            if s.confidence >= 0.75:
-                level = "S"
-                level_label = "强烈推荐"
-            elif s.confidence >= 0.60:
-                level = "A"
-                level_label = "推荐"
-            elif s.confidence >= 0.45:
-                level = "B"
-                level_label = "关注"
-            elif s.confidence >= 0.25:
-                level = "C"
-                level_label = "观察"
-            else:
-                level = "D"
-                level_label = "不参与"
 
             signal_list.append({
                 # 基础信息
@@ -219,10 +201,14 @@ class CosUploader:
                 "strategies": s.strategies,
                 "strategy_count": len(s.strategies),
 
-                # 置信度 & 等级
+                # 评级（选股依据）
+                "rating": s.rating,
+                "rating_label": s.rating_label,
+                "rating_stars": s.rating_stars,
+                "total_score": round(s.total_score, 1),
+
+                # 形态分（解释性指标，不参与选股排序）
                 "confidence": round(s.confidence, 3),
-                "level": level,
-                "level_label": level_label,
 
                 # 当前行情
                 "current_price": s.current_price,
@@ -256,19 +242,12 @@ class CosUploader:
                 "rationale": s.rationale,
             })
 
-        # 评级汇总
-        rating_summary = {}
-        for sig in signal_list:
-            level = sig["level"]
-            rating_summary[level] = rating_summary.get(level, 0) + 1
-
         data: dict[str, Any] = {
             **self._metadata(),
             "type": "signals",
             "market_regime": market_regime,
             "suggested_exposure": suggested_exposure,
             "total_signals": len(signal_list),
-            "rating_summary": rating_summary,
             "signals": signal_list,
 
             # 附加：评级结果（如有），供手机端做评级分布展示

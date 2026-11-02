@@ -146,7 +146,7 @@ class SignalGenerator:
             position_pct = 0.05
             atr_val_rounded = round(atr_val, 2)
 
-        # ---- 计算置信度 ----
+        # ---- 计算形态分（内部字段仍为 confidence） ----
         confidence, confidence_details = self._calc_confidence(
             strategies=strategies,
             vol_ratio=vol_ratio,
@@ -228,7 +228,7 @@ class SignalGenerator:
         atr_ratio: float = 0.0,
         recent_max_dd: float = 0.0,
     ) -> tuple[float, dict]:
-        """综合置信度计算 v3.3 — 6 维度评分 + 风险控制 + 市场修正。
+        """形态分计算 v3.3 — 6 维度评分 + 风险控制 + 市场修正。
 
         参考 综合评分.docx 框架，加入市场状态修正。
 

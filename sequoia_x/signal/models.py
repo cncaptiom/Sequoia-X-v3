@@ -36,8 +36,14 @@ class TradeSignal:
     suggested_position_pct: float = 0.0   # 建议仓位占比（占资金比例，如 0.08 = 8%）
     atr_value: Optional[float] = None     # 当前 ATR 值（用于评估波动风险）
 
-    # 评分与排序
-    confidence: float = 0.0               # 综合置信度 0~1
+    # 评级（选股依据；--daily 路径不产生评级，留空）
+    rating: str = ""                      # strong_buy/buy/watch/attention/avoid
+    rating_label: str = ""                # 展示用标签（S级/A级/B级/C级/回避）
+    rating_stars: str = ""                # ★~★★★★★
+    total_score: float = 0.0              # 截面 Z 合成总分
+
+    # 形态分（解释性指标，不参与选股排序）
+    confidence: float = 0.0               # 综合形态分 0~1
     score_details: dict[str, float] = field(default_factory=dict)  # 各维度细分得分
 
     # 市场环境
@@ -58,7 +64,9 @@ class TradeSignal:
         if self.take_profit_2:
             parts.append(f"目标2:{self.take_profit_2:.2f}")
         parts.append(f"仓位:{self.suggested_position_pct:.0%}")
-        parts.append(f"置信度:{self.confidence:.0%}")
+        if self.rating_label:
+            parts.append(f"评级:{self.rating_label}")
+        parts.append(f"形态分:{self.confidence:.0%}")
         parts.append(self.rationale[:30])
         return " | ".join(parts)
 
@@ -87,9 +95,9 @@ class SignalResult:
 
     @property
     def top_signals(self) -> list[TradeSignal]:
-        """按置信度降序排列。"""
+        """按形态分降序排列。"""
         return sorted(self.signals, key=lambda x: x.confidence, reverse=True)
 
     def top_n(self, n: int = 10) -> list[TradeSignal]:
-        """获取置信度最高的前 N 个信号。"""
+        """获取形态分最高的前 N 个信号。"""
         return self.top_signals[:n]

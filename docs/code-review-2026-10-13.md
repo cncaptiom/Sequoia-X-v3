@@ -495,6 +495,11 @@ r.rating = self._calculate_rating(r.trend_passed, total)     # 定级用：未�
 > 同时看到「推荐」和一个很低的 `[Lv.X]`。怎么统一（或怎么把两者含义在界面上说清）
 > 仍待决定。
 
+> **2026-10-22 已决（用户选择「卡片显示评级，置信度降级」）**：
+> 飞书/终端/手机端改为显示评级类别；`confidence` 对外改名「形态分」，仅作解释性指标，
+> 不再带 S/A/B/C/D 等级；`signals/today.json` 移除 `level` / `level_label` / `rating_summary`。
+> 选股口径不变（评级类别 → 总分 → 形态分）。见 `CHANGELOG.md` 第二十八节。
+
 ### D3 — 评级分布极端：87% 是 `avoid`（**已查明**）
 
 实测分布：`avoid=4348`(87%)、`watch=502`、`attention=101`、`buy=42`、`strong_buy=0`（全市场 4993 只）。

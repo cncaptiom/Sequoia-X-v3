@@ -243,13 +243,14 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
             rating_stars_map = {r.symbol: r.rating_stars for r in (rating_results or [])}
             top_picks = [{
                 "symbol": s.symbol, "name": s.name,
-                "rating": rating_map.get(s.symbol, "strong_buy" if s.confidence >= 0.75 else "buy" if s.confidence >= 0.60 else "watch"),
-                "rating_label": rating_label_map.get(s.symbol, "S级" if s.confidence >= 0.75 else "A级" if s.confidence >= 0.60 else "关注"),
-                "rating_stars": rating_stars_map.get(s.symbol, "★★★★★" if s.confidence >= 0.75 else "★★★★" if s.confidence >= 0.60 else "★★★"),
-                "total_score": rating_score_map.get(s.symbol, s.confidence * 10),
+                # 评级缺失时不拿形态分冒充（--daily 备用路径没有评级）
+                "rating": rating_map.get(s.symbol, ""),
+                "rating_label": rating_label_map.get(s.symbol, ""),
+                "rating_stars": rating_stars_map.get(s.symbol, ""),
+                "total_score": rating_score_map.get(s.symbol, 0.0),
                 "confidence": round(s.confidence, 3),
                 "current_price": s.current_price,
-            } for s in sorted(signals, key=lambda x: x.confidence, reverse=True)[:10]]
+            } for s in signals[:10]]
         elif rating_results:
             top_picks = [{
                 "symbol": r.symbol, "name": r.name,
@@ -733,7 +734,7 @@ def _run_rating(settings, logger, engine, notifier) -> None:
     # 第 15 名常有大量同分股票，直接 all_results[:15] 会按输入顺序任意截断
     # （名单由股票列表顺序决定，输入集合一变就可能变）。
     # 因此先放宽候选池到「第 15 名及以上 + 所有同评级同分者」，
-    # 等 batch_generate 算出置信度后，再用置信度作为并列时的二级排序键截断。
+    # 等 batch_generate 算出形态分后，再用形态分作为并列时的二级排序键截断。
     # 展示/推送条数：与 push_feishu 的 DISPLAY_TOP_N 共用同一常量，避免两处 15 各自漂移
     from sequoia_x.recommender.reporter import DISPLAY_TOP_N
 
@@ -845,13 +846,25 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                 )
                 signals.append(sig)
 
-        # 最终名单：先按 (评级类别, 总分)，并列时再按置信度降序，取前 DISPLAY_TOP_N。
-        # batch_generate 只按置信度排过序，这里把评级维度补回来，
-        # 否则同分股票的顺序会由置信度而不是评级决定。
+        # 把评级写进 TradeSignal：推送/展示以评级为准（选股依据）。
+        # confidence 只作为解释性指标（形态分），以及评级+总分完全相同时的二级排序键。
+        rating_by_symbol = {r.symbol: r for r in all_results}
+        for s in signals:
+            r = rating_by_symbol.get(s.symbol)
+            if r is None:
+                continue
+            s.rating = r.rating
+            s.rating_label = r.rating_label
+            s.rating_stars = r.rating_stars
+            s.total_score = r.total_score
+
+        # 最终名单：先按 (评级类别, 总分)，并列时再按形态分降序，取前 DISPLAY_TOP_N。
+        # batch_generate 只按形态分排过序，这里把评级维度补回来，
+        # 否则同分股票的顺序会由形态分而不是评级决定。
         pool_key = {r.symbol: _production_key(r) for r in candidates}
         signals.sort(key=lambda s: (pool_key.get(s.symbol, (9, 0.0)), -s.confidence))
         signals = signals[:DISPLAY_TOP_N]
-        logger.info(f"推送名单 {len(signals)} 只（排序：评级 → 总分 → 置信度）")
+        logger.info(f"推送名单 {len(signals)} 只（排序：评级 → 总分 → 形态分）")
 
         # 记录推荐到数据库：与飞书推送的名单保持一致，
         # 否则 --review 的命中率统计没有数据源（--rating 是生产实际跑的路径）

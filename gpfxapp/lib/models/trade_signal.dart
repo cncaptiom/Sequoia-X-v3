@@ -1,5 +1,5 @@
 /// PC端完整信号数据（COS signals/today.json）
-/// 包含每只推荐股票的操作区间、止损止盈、建议仓位、置信度、买入理由
+/// 包含每只推荐股票的操作区间、止损止盈、建议仓位、形态分、买入理由
 class PcTradeSignal {
   final String symbol;
   final String name;

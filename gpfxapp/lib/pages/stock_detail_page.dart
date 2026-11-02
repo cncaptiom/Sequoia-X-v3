@@ -385,10 +385,9 @@ class StockDetailPage extends StatelessWidget {
         : analysis?.takeProfitPrice;
     final String buyRange = hasPc ? (pcRating.buyRange as String? ?? '') : '';
 
-    // 完整操作信号（signals/today.json：置信度/仓位/理由）
+    // 完整操作信号（signals/today.json：形态分/仓位/理由）
     final double sigConfidence = signal?.confidence ?? 0;
     final double sigPositionPct = signal?.positionPct ?? 0;
-    final String sigLevelLabel = signal?.levelLabel ?? '';
     final String sigRationale = signal?.rationale ?? '';
     final String sigEntryCondition = signal?.entryCondition ?? '';
 
@@ -629,18 +628,13 @@ class StockDetailPage extends StatelessWidget {
                               ? AppTheme.downColor
                               : AppTheme.textHint)),
                 ],
-                // 推荐等级 + 置信度合并到行尾，避免挤占盈亏比/偏离的显示
-                if (sigLevelLabel.isNotEmpty || sigConfidence > 0) ...[
+                // 形态分（解释性指标）。评级已在上方单独展示。
+                if (sigConfidence > 0) ...[
                   const SizedBox(width: 8),
                   Text(
-                      [
-                        sigLevelLabel,
-                        if (sigConfidence > 0) '${(sigConfidence * 100).round()}%',
-                      ].where((e) => e.isNotEmpty).join(' · '),
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: ratingColor)),
+                      '形态 ${(sigConfidence * 100).round()}%',
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textHint)),
                 ],
               ],
             ), // Row
