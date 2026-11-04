@@ -563,7 +563,7 @@ def _run_daily(settings, logger, engine, notifier) -> None:
             # 同步到腾讯云COS（供手机端实时监控）
             # 返回值必须看：`_upload_to_cos` 会返回 ok=False 表示部分失败（手机端可能
             # 拿不到今日数据），此前这个返回值被整个丢弃，失败是静默的。
-            if not _upload_to_cos(settings, logger, engine, signals=signals,
+            if not _upload_to_cos(settings, logger, engine, signals=top_signals,
                                   regime_result=regime):
                 raise CoreStepFailure("COS 同步未全部成功")
         else:
@@ -796,14 +796,23 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                             entry_low = float(parts[0])
                             entry_high = float(parts[1])
                     except (ValueError, IndexError):
-                        pass
-                if entry_low <= 0 or entry_high <= 0:
-                    entry_low = r.current_price * 0.97
-                    entry_high = r.current_price * 1.01
-                stop_loss = r.stop_loss_price or round(entry_low * 0.95, 2)
-                tp1 = r.take_profit_price or round(entry_high * 1.08, 2)
-                tp2 = round(entry_high * 1.15, 2)
-                pos_pct = 0.08 if r.rating == "strong_buy" else 0.05
+                        entry_low = entry_high = 0.0
+                stop_loss = r.stop_loss_price or 0.0
+                tp1 = r.take_profit_price or 0.0
+                # 兜底不造数字：评级没给出完整买卖点就只观察
+                if entry_low > 0 and entry_high > 0 and stop_loss > 0 and tp1 > 0:
+                    # 区间构造保证 low < 现价，只可能出现 inside/outside
+                    zone_status = "outside" if r.current_price > entry_high else "inside"
+                    zone_reason = ""
+                    entry_ref = r.current_price
+                else:
+                    entry_low = entry_high = 0.0
+                    stop_loss = 0.0
+                    tp1 = 0.0
+                    zone_status, zone_reason, entry_ref = (
+                        "none", "评级未给出完整买卖点，本期只观察", 0.0)
+                tp2 = None
+                pos_pct = 0.0
                 strat_cnt = sum(1 for v in r.strategy_scores.values() if v > 0)
                 conf_score = 0.0
                 # 综合评分.docx 规则：
@@ -829,18 +838,9 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                     conf_score += 0.10
                 # 截断到1.0
                 confidence = round(max(min(conf_score, 1.0), 0.05), 3)
-                # 兜底构建也要带区间状态，否则组合仓位分配会把它当成不可买
-                if entry_low > 0 and entry_high > 0:
-                    if r.current_price > entry_high:
-                        zone_status, zone_reason, entry_ref = "outside", "", r.current_price
-                    elif r.current_price < entry_low:
-                        zone_status, zone_reason, entry_ref = "below", "已跌破买入区间", 0.0
-                    else:
-                        zone_status, zone_reason, entry_ref = "inside", "", r.current_price
-                else:
-                    zone_status, zone_reason, entry_ref = "none", "无有效支撑", 0.0
                 from sequoia_x.signal.pricing import compute_risk_reward
-                rr_obj = compute_risk_reward(entry_ref, stop_loss, tp1) if entry_ref else None
+                rr_obj = compute_risk_reward(entry_ref, stop_loss, tp1) \
+                    if entry_ref > 0 else None
                 sname = r.name or stock_names.get(r.symbol, r.symbol)
                 sig = TradeSignal(
                     symbol=r.symbol, name=sname,
@@ -849,10 +849,13 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                     current_price=r.current_price,
                     entry_zone_low=round(entry_low, 2),
                     entry_zone_high=round(entry_high, 2),
-                    entry_condition=f"现价{r.current_price:.2f}，买入区间{entry_low:.2f}~{entry_high:.2f}",
+                    entry_condition=(
+                        f"现价{r.current_price:.2f}，支撑区{entry_low:.2f}~{entry_high:.2f}"
+                        if zone_status != "none" else zone_reason),
                     stop_loss=round(stop_loss, 2),
                     take_profit_1=round(tp1, 2),
-                    take_profit_2=round(tp2, 2),
+                    take_profit_2=tp2,
+                    target_is_fallback=r.target_is_fallback,
                     suggested_position_pct=pos_pct,
                     confidence=confidence,
                     score_details=r.strategy_scores or {},
@@ -862,7 +865,9 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                     risk_reward=rr_obj.value if rr_obj else None,
                     risk_reward_capped=rr_obj.capped if rr_obj else False,
                     market_regime=regime.label,
-                    rationale=f"评级{r.rating_label}，总分{r.total_score:.1f}，{sname}进入买入区间",
+                    rationale=(f"评级{r.rating_label}，总分{r.total_score:.1f}，"
+                               + (f"{sname}进入支撑区" if zone_status != "none"
+                                  else f"{sname}本期只观察")),
                 )
                 signals.append(sig)
 

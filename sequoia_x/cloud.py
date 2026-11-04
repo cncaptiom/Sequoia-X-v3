@@ -190,10 +190,13 @@ class CosUploader:
         # 不再按形态分重排，避免展示顺序与选股依据不一致。
         signal_list = []
         for s in signals:
-            entry_mid = (s.entry_zone_low + s.entry_zone_high) / 2
-            entry_ref = s.entry_ref or s.current_price
-            risk_pct = round((entry_ref - s.stop_loss) / entry_ref * 100, 1) if s.stop_loss > 0 else 0
-            reward_pct = round((s.take_profit_1 - entry_ref) / entry_ref * 100, 1) if s.take_profit_1 > 0 else 0
+            has_zone = s.zone_status != "none"
+            entry_mid = round((s.entry_zone_low + s.entry_zone_high) / 2, 2) if has_zone else None
+            entry_ref = round(s.entry_ref, 2) if has_zone and s.entry_ref > 0 else None
+            risk_pct = round((entry_ref - s.stop_loss) / entry_ref * 100, 1) \
+                if has_zone and entry_ref and s.stop_loss > 0 else None
+            reward_pct = round((s.take_profit_1 - entry_ref) / entry_ref * 100, 1) \
+                if has_zone and entry_ref and s.take_profit_1 > 0 else None
 
             signal_list.append({
                 # 基础信息
@@ -215,19 +218,20 @@ class CosUploader:
                 "current_price": s.current_price,
                 "last_date": s.last_date,
 
-                # 操作区间
-                "entry_low": s.entry_zone_low,
-                "entry_high": s.entry_zone_high,
-                "entry_mid": round(entry_mid, 2),
-                "entry_ref": round(entry_ref, 2),
+                # 操作区间（无区间时导出 null，不用 0 充数）
+                "entry_low": s.entry_zone_low if has_zone else None,
+                "entry_high": s.entry_zone_high if has_zone else None,
+                "entry_mid": entry_mid,
+                "entry_ref": entry_ref,
                 "entry_condition": s.entry_condition,
                 "zone_status": s.zone_status,
                 "zone_reason": s.zone_reason,
 
                 # 风险控制
-                "stop_loss": s.stop_loss,
-                "target_1": s.take_profit_1,
-                "target_2": s.take_profit_2,
+                "stop_loss": s.stop_loss if has_zone else None,
+                "target_1": s.take_profit_1 if has_zone else None,
+                "target_2": s.take_profit_2 if has_zone else None,
+                "target_is_fallback": s.target_is_fallback,
                 "max_hold_days": s.max_hold_days,
 
                 # 盈亏比（统一函数；None 表示不可算）

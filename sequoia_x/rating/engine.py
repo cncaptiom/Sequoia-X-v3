@@ -33,6 +33,7 @@ from sequoia_x.signal.pricing import (
     build_entry_zone,
     compute_risk_reward,
     entry_reference,
+    original_stop_price,
     pick_target,
     plan_risk_ok,
     resistance_candidates_from_bars,
@@ -365,6 +366,7 @@ class AnalysisResult:
     zone_status: str = ""          # inside / outside / below / none
     zone_reason: str = ""
     risk_reward_text: str = "—"    # 不可算时为 —，截断时为 ≥10
+    target_is_fallback: bool = False
 
     @property
     def rating_label(self) -> str:
@@ -393,6 +395,7 @@ class AnalysisResult:
             "risk_reward_text": self.risk_reward_text,
             "zone_status": self.zone_status,
             "zone_reason": self.zone_reason,
+            "target_is_fallback": self.target_is_fallback,
             "stop_loss_price": round(self.stop_loss_price, 2) if self.stop_loss_price else None,
             "take_profit_price": round(self.take_profit_price, 2) if self.take_profit_price else None,
             "buy_range": self.buy_range or "",
@@ -509,16 +512,17 @@ class RatingEngine:
         stop_loss = take_profit = None
         risk_reward = 0.0
         risk_reward_text = "—"
+        target_is_fallback = False
 
         if zone.status != "none":
             ma20 = float(df["close"].rolling(20).mean().iloc[-1])
             low10 = float(df["low"].tail(10).min())
-            original_stop = max(last_close - 2 * atr, ma20 * 0.97, low10 * 0.98)
-            original_stop = min(original_stop, last_close * 0.95)
+            original_stop = original_stop_price(last_close, atr, ma20, low10)
             candidate_stop = stop_price(zone.low, atr, original_stop)
             if plan_risk_ok(last_close, candidate_stop):
                 stop_loss = candidate_stop
-                take_profit = pick_target(resistances, last_close, atr)
+                tgt = pick_target(resistances, last_close, atr)
+                take_profit, target_is_fallback = tgt.value, tgt.is_fallback
                 buy_low, buy_high = zone.low, zone.high
                 rr = compute_risk_reward(
                     entry_reference(zone, last_close), stop_loss, take_profit)
@@ -551,6 +555,7 @@ class RatingEngine:
             zone_status=zone_status,
             zone_reason=zone_reason,
             risk_reward_text=risk_reward_text,
+            target_is_fallback=target_is_fallback,
             current_price=round(last_close, 2),
         )
 

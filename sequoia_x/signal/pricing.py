@@ -27,6 +27,11 @@ MIN_SUPPORT_GAP_PCT = 0.005
 MIN_RISK_PCT = 0.01
 # 盈亏比展示上限
 RR_CAP = 10.0
+# 原 ATR 止损的参数（与区间下轨取更深者）
+STOP_ATR_MULT = 2.0
+STOP_MA20_MULT = 0.97
+STOP_LOW10_MULT = 0.98
+STOP_MAX_PCT = 0.95
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,12 @@ class RiskReward:
         if self.capped:
             return f"≥{self.value:g}"
         return f"{self.value:.2f}"
+
+
+@dataclass(frozen=True)
+class Target:
+    value: float
+    is_fallback: bool = False   # True 表示没有合格阻力，按 ATR 兜底
 
 
 def build_entry_zone(
@@ -140,13 +151,23 @@ def entry_reference(zone: EntryZone, price: float) -> float | None:
     return None
 
 
-def pick_target(resistances: list[float], ref: float, atr: float) -> float:
-    """取 ref 上方第一个至少高出 1×ATR 的阻力；没有则用 ref + 2×ATR。"""
+def pick_target(resistances: list[float], ref: float, atr: float) -> Target:
+    """取 ref 上方第一个至少高出 1×ATR 的阻力；没有则用 ref + 2×ATR 兜底。"""
     floor = ref + TARGET_MIN_ATR * atr
     for r in sorted(v for v in resistances if v > ref):
         if r >= floor:
-            return round(r, 2)
-    return round(ref + TARGET_FALLBACK_ATR * atr, 2)
+            return Target(round(r, 2), is_fallback=False)
+    return Target(round(ref + TARGET_FALLBACK_ATR * atr, 2), is_fallback=True)
+
+
+def original_stop_price(price: float, atr: float, ma20: float, low10: float) -> float:
+    """原 ATR 止损：max(价-2ATR, MA20×0.97, 近10日低点×0.98)，再钳到价×0.95。"""
+    stop = max(
+        price - STOP_ATR_MULT * atr,
+        ma20 * STOP_MA20_MULT,
+        low10 * STOP_LOW10_MULT,
+    )
+    return round(min(stop, price * STOP_MAX_PCT), 2)
 
 
 def stop_price(low: float, atr: float, original_stop: float | None = None) -> float:

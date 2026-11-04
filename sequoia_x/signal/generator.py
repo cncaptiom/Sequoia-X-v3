@@ -16,6 +16,7 @@ from sequoia_x.signal.pricing import (
     build_entry_zone,
     compute_risk_reward,
     entry_reference,
+    original_stop_price,
     pick_target,
     plan_risk_ok,
     resistance_candidates_from_bars,
@@ -108,26 +109,24 @@ class SignalGenerator:
         resistances = resistance_candidates_from_bars(highs)
 
         # 原 ATR 止损作为候选，与区间下轨取更深者
-        original_stop = max(
-            current_price - 2 * atr_val,
-            ma20 * 0.97,
-            recent_low_10 * 0.98,
-        )
-        original_stop = min(original_stop, current_price * 0.95)
+        original_stop = original_stop_price(current_price, atr_val, ma20, recent_low_10)
 
         zone = build_entry_zone(current_price, atr_val, supports)
         stop_loss = 0.0
-        target_1 = target_2 = 0.0
+        target_1 = 0.0
+        target_2 = None
+        target_is_fallback = False
         entry_ref = 0.0
         rr = None
         if zone.status != "none":
             candidate_stop = stop_price(zone.low, atr_val, original_stop)
             entry_ref = entry_reference(zone, current_price) or 0.0
-            if entry_ref and plan_risk_ok(entry_ref, candidate_stop):
+            if plan_risk_ok(entry_ref, candidate_stop):
                 stop_loss = candidate_stop
-                target_1 = pick_target(resistances, entry_ref, atr_val)
+                tgt = pick_target(resistances, entry_ref, atr_val)
+                target_1, target_is_fallback = tgt.value, tgt.is_fallback
                 above = sorted({round(r, 2) for r in resistances if r > target_1 * 1.02})
-                target_2 = above[0] if above else round(target_1 * 1.08, 2)
+                target_2 = above[0] if above else None
                 rr = compute_risk_reward(entry_ref, stop_loss, target_1)
             else:
                 # 波动过小：止损距离小于现价 1%，与「不再给数字」的处理一致
@@ -194,6 +193,7 @@ class SignalGenerator:
             stop_loss=round(stop_loss, 2),
             take_profit_1=round(target_1, 2) if target_1 else 0.0,
             take_profit_2=round(target_2, 2) if target_2 else None,
+            target_is_fallback=target_is_fallback,
             max_hold_days=20,
             suggested_position_pct=round(position_pct, 4),
             atr_value=round(atr_val_rounded, 2),

@@ -30,6 +30,7 @@ class TradeSignal:
     stop_loss: float = 0.0                # 止损价
     take_profit_1: float = 0.0            # 第一目标价
     take_profit_2: Optional[float] = None # 第二目标价（可选）
+    target_is_fallback: bool = False      # 目标是否由 ATR 兜底（无合格阻力）
     max_hold_days: int = 20               # 最长持有天数（交易日）
 
     # 仓位管理
@@ -49,7 +50,7 @@ class TradeSignal:
     # 买入区间状态（定义见 signal/pricing.py）
     zone_status: str = ""                 # inside / outside / below / none
     zone_reason: str = ""                 # status 为 none 时的原因
-    entry_ref: float = 0.0                # 盈亏比参考入场价（区间内=现价，区间外=上轨）
+    entry_ref: float = 0.0                # 盈亏比参考入场价（可买状态一律=现价）
     risk_reward: Optional[float] = None   # 统一函数算出的盈亏比；None 表示不可算
     risk_reward_capped: bool = False      # 是否已按上限截断
 

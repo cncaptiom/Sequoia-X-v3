@@ -56,6 +56,8 @@ class ReportGenerator:
                 print(f"  │  买入区间: {sig.entry_zone_low:.2f} ~ {sig.entry_zone_high:.2f}")
                 print(f"  │  触发条件: {sig.entry_condition}")
             print(f"  │  目标价1: {sig.take_profit_1:.2f}", end="")
+            if sig.target_is_fallback:
+                print("（ATR 兜底）", end="")
             if sig.take_profit_2:
                 print(f"  目标价2: {sig.take_profit_2:.2f}", end="")
             print()
@@ -185,6 +187,8 @@ class ReportGenerator:
                     f"（{zone_hint}）\n"
                     f"**🎯 目标价：** {sig.take_profit_1:.2f}"
                 )
+                if sig.target_is_fallback:
+                    content += "（ATR 兜底，无明确阻力）"
                 if sig.take_profit_2:
                     content += f" → {sig.take_profit_2:.2f}"
                 content += f"\n**🛑 止损价：** {sig.stop_loss:.2f}"

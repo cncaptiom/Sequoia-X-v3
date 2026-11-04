@@ -7,6 +7,7 @@ from sequoia_x.signal.pricing import (
     build_entry_zone,
     compute_risk_reward,
     entry_reference,
+    original_stop_price,
     pick_target,
     plan_risk_ok,
     stop_price,
@@ -58,14 +59,21 @@ def test_entry_reference_by_status():
 
 
 def test_pick_target_skips_too_close_resistance():
-    # 97.5 只比上轨高 0.5 ATR，不合格；取 99（≥ 上轨 + 1 ATR）
+    # 97.5 只比参考价高 0.5 ATR，不合格；取 99（≥ 参考价 + 1 ATR）
     target = pick_target([97.5, 99.0], ref=97.0, atr=1.0)
-    assert target == pytest.approx(99.0)
+    assert target.value == pytest.approx(99.0)
+    assert target.is_fallback is False
 
 
 def test_pick_target_falls_back_when_no_resistance():
     target = pick_target([], ref=97.0, atr=1.0)
-    assert target == pytest.approx(99.0)
+    assert target.value == pytest.approx(99.0)
+    assert target.is_fallback is True
+
+
+def test_original_stop_price_clamps_to_price():
+    # max(100-4, 96*0.97, 95*0.98)=96 → 再钳到 100*0.95
+    assert original_stop_price(100, 2, 96, 95) == pytest.approx(95.0)
 
 
 def test_stop_is_always_below_low_with_buffer():
