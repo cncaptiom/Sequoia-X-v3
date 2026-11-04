@@ -11,7 +11,17 @@ from sequoia_x.signal.models import TradeSignal
 from sequoia_x.data.engine import DataEngine
 from sequoia_x.risk import PositionSizer, compute_atr
 from sequoia_x.utils.name_resolver import get_name_resolver
-from sequoia_x.analysis.technical import analyze_stock
+from sequoia_x.signal.pricing import (
+    EntryZone,
+    build_entry_zone,
+    compute_risk_reward,
+    entry_reference,
+    pick_target,
+    plan_risk_ok,
+    resistance_candidates_from_bars,
+    stop_price,
+    support_candidates_from_bars,
+)
 
 logger = get_logger(__name__)
 
@@ -70,7 +80,6 @@ class SignalGenerator:
         ma5 = float(closes.rolling(5).mean().iloc[-1])
         ma10 = float(closes.rolling(10).mean().iloc[-1])
         ma20 = float(closes.rolling(20).mean().iloc[-1])
-        ma60 = float(closes.rolling(60).mean().iloc[-1]) if len(df) >= 60 else None
 
         # ATR 和波动率
         atr_val = compute_atr(highs, lows, closes)
@@ -87,64 +96,54 @@ class SignalGenerator:
         recent_max_dd = (recent_trough - recent_peak) / recent_peak if recent_peak > 0 else 0
 
         # 近期高低点
-        recent_high_10 = float(highs.tail(10).max())
         recent_low_10 = float(lows.tail(10).min())
-        recent_high_20 = float(highs.tail(20).max())
         recent_low_20 = float(lows.tail(20).min())
 
         # 成交量
         vol_ma20 = float(volumes.tail(20).mean())
         vol_ratio = float(last["volume"]) / vol_ma20 if vol_ma20 > 0 else 1.0
 
-        # ---- 生成买入区间 ----
-        # 策略1: MA5 附近（趋势跟踪型买入点）
-        # 策略2: 布林带下轨附近（回调买入点）
-        bb_std = float(closes.tail(20).std())
-        bb_lower = ma20 - 2 * bb_std
+        # ---- 生成买入区间（唯一定义见 signal/pricing.py） ----
+        supports = support_candidates_from_bars(closes, lows)
+        resistances = resistance_candidates_from_bars(highs)
 
-        # 买入区间下轨：max(布林下轨, 近10日低点, MA60)
-        entry_low_candidates = [bb_lower, recent_low_10]
-        if ma60 is not None:
-            entry_low_candidates.append(ma60)
-        entry_low = max(min(entry_low_candidates), current_price * 0.92)  # 不低于现价92%
-        entry_low = max(entry_low, current_price * 0.85)  # 绝对下限85%
+        # 原 ATR 止损作为候选，与区间下轨取更深者
+        original_stop = max(
+            current_price - 2 * atr_val,
+            ma20 * 0.97,
+            recent_low_10 * 0.98,
+        )
+        original_stop = min(original_stop, current_price * 0.95)
 
-        # 买入区间上轨：不超过现价，不低于 MA5
-        entry_high = min(current_price, ma5 * 1.02)
-        entry_high = max(entry_high, entry_low)  # 确保上轨 >= 下轨
+        zone = build_entry_zone(current_price, atr_val, supports)
+        stop_loss = 0.0
+        target_1 = target_2 = 0.0
+        entry_ref = 0.0
+        rr = None
+        if zone.status != "none":
+            candidate_stop = stop_price(zone.low, atr_val, original_stop)
+            entry_ref = entry_reference(zone, current_price) or 0.0
+            if entry_ref and plan_risk_ok(entry_ref, candidate_stop):
+                stop_loss = candidate_stop
+                target_1 = pick_target(resistances, entry_ref, atr_val)
+                above = sorted({round(r, 2) for r in resistances if r > target_1 * 1.02})
+                target_2 = above[0] if above else round(target_1 * 1.08, 2)
+                rr = compute_risk_reward(entry_ref, stop_loss, target_1)
+            else:
+                # 波动过小：止损距离小于现价 1%，与「不再给数字」的处理一致
+                zone = EntryZone(status="none", reason="止损距离不足")
 
-        # ---- 生成止损价 ----
-        # 方法1: 基于 ATR（2倍ATR止损）
-        stop_atr = current_price - 2 * atr_val
-        # 方法2: 基于 MA20
-        stop_ma = ma20 * 0.97
-        # 方法3: 基于近期低点
-        stop_low = recent_low_10 * 0.98
-        # 取最紧的止损（保护本金优先）
-        stop_loss = max(stop_atr, stop_ma, stop_low)
-        stop_loss = min(stop_loss, current_price * 0.95)  # 不超过5%止损
-
-        # ---- 生成目标价 ----
-        # 目标1: 近期高点
-        target_1 = max(recent_high_10, current_price * 1.05)
-        # 目标2: 更远的压力位（MA60 上方或20日高点）
-        if ma60 is not None and ma60 > target_1:
-            target_2 = ma60 * 1.05
-        else:
-            target_2 = recent_high_20 * 1.03
-        if target_2 <= target_1 * 1.02:
-            target_2 = target_1 * 1.08
-
-        # ---- 计算建议仓位 ----
-        try:
-            sizer = PositionSizer(total_capital=self.total_capital)
-            position = sizer.calculate(symbol, df, entry_price=entry_low)
-            position_pct = position.position_pct
-            atr_val_rounded = position.atr
-        except Exception:
-            # fallback: 固定仓位 5%
-            position_pct = 0.05
-            atr_val_rounded = round(atr_val, 2)
+        # ---- 计算建议仓位（终值由 main 按组合总仓位重新分配） ----
+        position_pct = 0.0
+        atr_val_rounded = round(atr_val, 2)
+        if zone.status != "none":
+            try:
+                sizer = PositionSizer(total_capital=self.total_capital)
+                position = sizer.calculate(symbol, df, entry_price=entry_ref or current_price)
+                position_pct = position.position_pct
+                atr_val_rounded = position.atr
+            except Exception:
+                position_pct = 0.05
 
         # ---- 计算形态分（内部字段仍为 confidence） ----
         confidence, confidence_details = self._calc_confidence(
@@ -161,37 +160,27 @@ class SignalGenerator:
             recent_max_dd=recent_max_dd,
         )
 
-        # ---- 生成选中理由 ----
-        rationale = self._build_rationale(
-            strategies=strategies,
-            vol_ratio=vol_ratio,
-            atr_val=atr_val_rounded,
-            current_price=current_price,
-            entry_low=entry_low,
-            entry_high=entry_high,
-            stop_loss=stop_loss,
-            target_1=target_1,
-        )
+        # ---- 生成选中理由与触发条件 ----
+        if zone.status == "none":
+            entry_low = entry_high = 0.0
+            entry_condition = f"{zone.reason}，本期只观察"
+            rationale = f"{'; '.join(strategies)} 策略触发 | {zone.reason} | 现价 {current_price:.2f}"
+        else:
+            entry_low, entry_high = zone.low, zone.high
+            entry_condition = self._entry_condition_text(zone, current_price)
+            rationale = self._build_rationale(
+                strategies=strategies,
+                vol_ratio=vol_ratio,
+                atr_val=atr_val_rounded,
+                current_price=current_price,
+                entry_low=entry_low,
+                entry_high=entry_high,
+                stop_loss=stop_loss,
+                target_1=target_1,
+            )
 
         # 获取股票名称
         name = get_name_resolver().get_name(symbol)
-
-        # 接入技术分析获取更精确的支撑压力
-        try:
-            tech = analyze_stock(df)
-            supports = tech.get("supports", {})
-            resistances = tech.get("resistances", {})
-
-            if supports:
-                support_val = list(supports.values())[0]
-                entry_low = max(entry_low, support_val * 0.98)
-            if resistances:
-                r_vals = list(resistances.values())
-                target_1 = max(target_1, r_vals[0])
-                if len(r_vals) > 1:
-                    target_2 = max(target_2, r_vals[-1])
-        except Exception:
-            pass
 
         return TradeSignal(
             symbol=symbol,
@@ -201,15 +190,20 @@ class SignalGenerator:
             last_date=last_date,
             entry_zone_low=round(entry_low, 2),
             entry_zone_high=round(entry_high, 2),
-            entry_condition=self._entry_condition_text(entry_low, entry_high, ma20, ma5),
+            entry_condition=entry_condition,
             stop_loss=round(stop_loss, 2),
-            take_profit_1=round(target_1, 2),
-            take_profit_2=round(target_2, 2),
+            take_profit_1=round(target_1, 2) if target_1 else 0.0,
+            take_profit_2=round(target_2, 2) if target_2 else None,
             max_hold_days=20,
             suggested_position_pct=round(position_pct, 4),
             atr_value=round(atr_val_rounded, 2),
             confidence=round(confidence, 3),
             score_details=confidence_details,
+            zone_status=zone.status,
+            zone_reason=zone.reason,
+            entry_ref=round(entry_ref, 2),
+            risk_reward=rr.value if rr else None,
+            risk_reward_capped=rr.capped if rr else False,
             market_regime=market_regime,
             rationale=rationale,
         )
@@ -346,14 +340,15 @@ class SignalGenerator:
 
         return min(score, 1.0), details
 
-    def _entry_condition_text(self, low: float, high: float, ma20: float, ma5: float) -> str:
-        """生成可读的买入触发条件。"""
-        parts = []
-        mid = (low + high) / 2
-        parts.append(f"价格回落至 {low:.2f}~{high:.2f} 区间")
-        if mid < ma20 * 1.02:
-            parts.append("（MA20 附近）")
-        return "".join(parts)
+    def _entry_condition_text(self, zone: EntryZone, current_price: float) -> str:
+        """生成可读的买入提示（区间只作风险参考，一律按现价买）。"""
+        if zone.status == "inside":
+            return f"现价 {current_price:.2f} 在支撑区（{zone.low:.2f}~{zone.high:.2f}）内，可按现价买入"
+        if zone.status == "outside":
+            gap = (current_price / zone.high - 1) * 100 if zone.high > 0 else 0
+            return (f"现价 {current_price:.2f} 高于支撑区（{zone.low:.2f}~{zone.high:.2f}）"
+                    f"约 {gap:.1f}%，可按现价买入（追高）")
+        return f"{zone.reason}，本期只观察"
 
     def _build_rationale(
         self,

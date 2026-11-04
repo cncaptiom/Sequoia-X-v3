@@ -191,8 +191,9 @@ class CosUploader:
         signal_list = []
         for s in signals:
             entry_mid = (s.entry_zone_low + s.entry_zone_high) / 2
-            risk_pct = round((s.current_price - s.stop_loss) / s.current_price * 100, 1) if s.stop_loss > 0 else 0
-            reward_pct = round((s.take_profit_1 - s.current_price) / s.current_price * 100, 1) if s.take_profit_1 > 0 else 0
+            entry_ref = s.entry_ref or s.current_price
+            risk_pct = round((entry_ref - s.stop_loss) / entry_ref * 100, 1) if s.stop_loss > 0 else 0
+            reward_pct = round((s.take_profit_1 - entry_ref) / entry_ref * 100, 1) if s.take_profit_1 > 0 else 0
 
             signal_list.append({
                 # 基础信息
@@ -218,7 +219,10 @@ class CosUploader:
                 "entry_low": s.entry_zone_low,
                 "entry_high": s.entry_zone_high,
                 "entry_mid": round(entry_mid, 2),
+                "entry_ref": round(entry_ref, 2),
                 "entry_condition": s.entry_condition,
+                "zone_status": s.zone_status,
+                "zone_reason": s.zone_reason,
 
                 # 风险控制
                 "stop_loss": s.stop_loss,
@@ -226,10 +230,11 @@ class CosUploader:
                 "target_2": s.take_profit_2,
                 "max_hold_days": s.max_hold_days,
 
-                # 盈亏比
+                # 盈亏比（统一函数；None 表示不可算）
                 "risk_pct": risk_pct,
                 "reward_pct": reward_pct,
-                "risk_reward_ratio": round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0,
+                "risk_reward_ratio": s.risk_reward,
+                "risk_reward_text": s.risk_reward_text(),
 
                 # 仓位
                 "position_pct": round(s.suggested_position_pct, 4),

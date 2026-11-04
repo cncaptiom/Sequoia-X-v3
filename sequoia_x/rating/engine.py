@@ -28,6 +28,17 @@ from sequoia_x.rating.strategies import (
     volume_price_strategy,
 )
 from sequoia_x.core.logger import get_logger
+from sequoia_x.risk import compute_atr
+from sequoia_x.signal.pricing import (
+    build_entry_zone,
+    compute_risk_reward,
+    entry_reference,
+    pick_target,
+    plan_risk_ok,
+    resistance_candidates_from_bars,
+    stop_price,
+    support_candidates_from_bars,
+)
 from sequoia_x.regime import REGIME_BIAS as _REGIME_BIAS
 from sequoia_x.signal.quality import winsorize, standardize
 
@@ -351,6 +362,9 @@ class AnalysisResult:
     take_profit_price: Optional[float] = None
     buy_range: Optional[str] = None
     current_price: float = 0.0
+    zone_status: str = ""          # inside / outside / below / none
+    zone_reason: str = ""
+    risk_reward_text: str = "—"    # 不可算时为 —，截断时为 ≥10
 
     @property
     def rating_label(self) -> str:
@@ -376,6 +390,9 @@ class AnalysisResult:
             "category_scores": {k: round(v, 1) for k, v in self.category_scores.items()},
             "signals": [{"name": s.name, "type": s.type} for s in self.signals[:5]],
             "risk_reward_ratio": round(self.risk_reward_ratio, 2),
+            "risk_reward_text": self.risk_reward_text,
+            "zone_status": self.zone_status,
+            "zone_reason": self.zone_reason,
             "stop_loss_price": round(self.stop_loss_price, 2) if self.stop_loss_price else None,
             "take_profit_price": round(self.take_profit_price, 2) if self.take_profit_price else None,
             "buy_range": self.buy_range or "",
@@ -482,20 +499,33 @@ class RatingEngine:
         # ── 策略正交化 + 配置权重驱动评分（组合逻辑统一在 _combine_scores） ──
         total_score, ortho_scores, category_scores = self._combine_scores(strategy_scores)
 
-        support = self._find_support(df)
-        resistance = self._find_resistance(df)
+        # ── 买入区间 / 目标 / 止损（唯一定义见 signal/pricing.py） ──
+        supports = support_candidates_from_bars(df["close"], df["low"])
+        resistances = resistance_candidates_from_bars(df["high"])
+        atr = compute_atr(df["high"], df["low"], df["close"])
+        zone = build_entry_zone(last_close, atr, supports)
+        zone_status, zone_reason = zone.status, zone.reason
+        buy_low = buy_high = None
+        stop_loss = take_profit = None
         risk_reward = 0.0
-        stop_loss = support * 0.97
-        take_profit = resistance
-        buy_low = support
-        buy_high = last_close * 1.02
+        risk_reward_text = "—"
 
-        if stop_loss > 0:
-            entry_mid = (buy_low + buy_high) / 2
-            reward = take_profit - entry_mid
-            risk_entry = entry_mid - stop_loss
-            if risk_entry > 0:
-                risk_reward = round(reward / risk_entry, 2)
+        if zone.status != "none":
+            ma20 = float(df["close"].rolling(20).mean().iloc[-1])
+            low10 = float(df["low"].tail(10).min())
+            original_stop = max(last_close - 2 * atr, ma20 * 0.97, low10 * 0.98)
+            original_stop = min(original_stop, last_close * 0.95)
+            candidate_stop = stop_price(zone.low, atr, original_stop)
+            if plan_risk_ok(last_close, candidate_stop):
+                stop_loss = candidate_stop
+                take_profit = pick_target(resistances, last_close, atr)
+                buy_low, buy_high = zone.low, zone.high
+                rr = compute_risk_reward(
+                    entry_reference(zone, last_close), stop_loss, take_profit)
+                risk_reward = rr.value or 0.0
+                risk_reward_text = rr.text()
+            else:
+                zone_status, zone_reason = "none", "止损距离不足"
 
         # 正交化后的评分用于输出（同类策略等值）
         output_strategy_scores = {k: round(v, 1) for k, v in ortho_scores.items()}
@@ -515,9 +545,12 @@ class RatingEngine:
             category_scores=category_scores,
             signals=signals,
             risk_reward_ratio=risk_reward,
-            stop_loss_price=round(stop_loss, 2),
-            take_profit_price=round(take_profit, 2),
-            buy_range=f"{buy_low:.2f} - {buy_high:.2f}",
+            stop_loss_price=round(stop_loss, 2) if stop_loss else None,
+            take_profit_price=round(take_profit, 2) if take_profit else None,
+            buy_range=f"{buy_low:.2f} - {buy_high:.2f}" if buy_low else "",
+            zone_status=zone_status,
+            zone_reason=zone_reason,
+            risk_reward_text=risk_reward_text,
             current_price=round(last_close, 2),
         )
 
@@ -694,24 +727,6 @@ class RatingEngine:
             passed = True
 
         return passed, " | ".join(conditions), signals
-
-    @staticmethod
-    def _find_support(df: pd.DataFrame) -> float:
-        lows = df["low"].tail(20).values
-        if len(lows) == 0:
-            return float(df["close"].iloc[-1]) * 0.95
-        q1 = float(np.percentile(lows, 25))
-        current = float(df["close"].iloc[-1])
-        return min(q1, current * 0.95)
-
-    @staticmethod
-    def _find_resistance(df: pd.DataFrame) -> float:
-        highs = df["high"].tail(20).values
-        if len(highs) < 3:
-            return float(df["close"].iloc[-1]) * 1.05
-        q3 = float(np.percentile(highs, 75))
-        current = float(df["close"].iloc[-1])
-        return max(q3, current * 1.03)
 
     # baostock 财务查询的节流间隔（秒），控制请求频率避免被限流踢线。
     # 重试循环与网络类错误码集合统一在 sequoia_x.utils.baostock_guard.query_with_reconnect

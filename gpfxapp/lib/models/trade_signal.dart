@@ -21,6 +21,10 @@ class PcTradeSignal {
   final double riskPct;
   final double rewardPct;
   final double riskRewardRatio;
+  final String riskRewardText;
+  final String zoneStatus;
+  final String zoneReason;
+  final double entryRef;
   final double positionPct;
   final double atr;
   final Map<String, dynamic> scoreDetails;
@@ -47,6 +51,10 @@ class PcTradeSignal {
     required this.riskPct,
     required this.rewardPct,
     required this.riskRewardRatio,
+    this.riskRewardText = '—',
+    this.zoneStatus = '',
+    this.zoneReason = '',
+    this.entryRef = 0,
     required this.positionPct,
     required this.atr,
     required this.scoreDetails,
@@ -80,6 +88,10 @@ class PcTradeSignal {
       riskPct: (json['risk_pct'] as num?)?.toDouble() ?? 0,
       rewardPct: (json['reward_pct'] as num?)?.toDouble() ?? 0,
       riskRewardRatio: (json['risk_reward_ratio'] as num?)?.toDouble() ?? 0,
+      riskRewardText: json['risk_reward_text'] as String? ?? '—',
+      zoneStatus: json['zone_status'] as String? ?? '',
+      zoneReason: json['zone_reason'] as String? ?? '',
+      entryRef: (json['entry_ref'] as num?)?.toDouble() ?? 0,
       positionPct: (json['position_pct'] as num?)?.toDouble() ?? 0,
       atr: (json['atr'] as num?)?.toDouble() ?? 0,
       scoreDetails: json['score_details'] as Map<String, dynamic>? ?? {},

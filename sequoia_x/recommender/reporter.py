@@ -13,6 +13,11 @@ logger = get_logger(__name__)
 # 追踪库写入的条数必须与之一致，否则「命中率」统计的分母会和用户看到的名单不符。
 DISPLAY_TOP_N = 15
 
+# 盈亏比配色阈值：按 2026-11-04 全市场分布标定
+# （P50=1.06 / P75=1.46 / P90=1.93），旧的 2.0/1.0 会让绝大多数卡片变红。
+RR_GREEN = 1.5
+RR_YELLOW = 1.0
+
 
 class ReportGenerator:
     """推荐报告生成器，支持终端打印和飞书推送。"""
@@ -37,7 +42,7 @@ class ReportGenerator:
             return
 
         for i, sig in enumerate(result.signals[:20], 1):
-            rr = sig.risk_reward_ratio()
+            rr = sig.risk_reward_text()
             print()
             print(f"  ┌─ #{i}  {sig.name} ({sig.symbol}) {sig.rating_stars}")
             print(f"  │  策略: {', '.join(sig.strategies)}")
@@ -45,14 +50,18 @@ class ReportGenerator:
                 print(f"  │  评级: {sig.rating_label}")
             print(f"  │  现价: {sig.current_price:.2f}")
             print(f"  │  ─────────────────────────────────────────────")
-            print(f"  │  买入区间: {sig.entry_zone_low:.2f} ~ {sig.entry_zone_high:.2f}")
-            print(f"  │  触发条件: {sig.entry_condition}")
+            if sig.zone_status == "none":
+                print(f"  │  本期只观察: {sig.zone_reason}")
+            else:
+                print(f"  │  买入区间: {sig.entry_zone_low:.2f} ~ {sig.entry_zone_high:.2f}")
+                print(f"  │  触发条件: {sig.entry_condition}")
             print(f"  │  目标价1: {sig.take_profit_1:.2f}", end="")
             if sig.take_profit_2:
                 print(f"  目标价2: {sig.take_profit_2:.2f}", end="")
             print()
             print(f"  │  止损价: {sig.stop_loss:.2f}  (盈亏比: {rr})")
-            print(f"  │  建议仓位: {sig.suggested_position_pct:.1%}")
+            if sig.zone_status != "none":
+                print(f"  │  建议仓位: {sig.suggested_position_pct:.1%}（按可买标的均分总仓位）")
             if sig.atr_value:
                 print(f"  │  ATR波动: {sig.atr_value:.2f}")
             print(f"  │  形态分: {sig.confidence:.0%}")
@@ -130,7 +139,7 @@ class ReportGenerator:
         for i, sig in enumerate(signals, 1):
             name = resolver.get_name(sig.symbol) if not sig.name else sig.name
             rr = sig.risk_reward_ratio()
-            emoji = "🟢" if rr >= 2.0 else "🟡" if rr >= 1.0 else "🔴"
+            emoji = "⚪" if rr is None else "🟢" if rr >= RR_GREEN else "🟡" if rr >= RR_YELLOW else "🔴"
 
             # 评级标签：选股依据。--daily（备用路径）不产生评级，留空。
             rating_tag = f"  [{sig.rating_label}]" if sig.rating_label else ""
@@ -161,14 +170,30 @@ class ReportGenerator:
                 f"{emoji} **{i}. {name} ({sig.symbol})**{rating_tag}\n"
                 f"{strat_tags}\n"
                 f"━━━━━━━━━━━━━━━━━\n"
-                f"**📥 买入区间：** {sig.entry_zone_low:.2f} ~ {sig.entry_zone_high:.2f}\n"
-                f"**🎯 目标价：** {sig.take_profit_1:.2f}"
             )
-            if sig.take_profit_2:
-                content += f" → {sig.take_profit_2:.2f}"
-            content += f"\n**🛑 止损价：** {sig.stop_loss:.2f}"
+            if sig.zone_status == "none":
+                content += f"**👀 本期只观察：** {sig.zone_reason}\n"
+            else:
+                if sig.zone_status == "inside":
+                    zone_hint = "现价在支撑区内，可按现价买入"
+                else:
+                    gap = (sig.current_price / sig.entry_zone_high - 1) * 100 \
+                        if sig.entry_zone_high > 0 else 0
+                    zone_hint = f"现价高于支撑区约 {gap:.1f}%，可按现价买入（追高）"
+                content += (
+                    f"**📥 买入区间：** {sig.entry_zone_low:.2f} ~ {sig.entry_zone_high:.2f}"
+                    f"（{zone_hint}）\n"
+                    f"**🎯 目标价：** {sig.take_profit_1:.2f}"
+                )
+                if sig.take_profit_2:
+                    content += f" → {sig.take_profit_2:.2f}"
+                content += f"\n**🛑 止损价：** {sig.stop_loss:.2f}"
             content += f"\n━━━━━━━━━━━━━━━━━\n"
-            content += f"盈亏比 {rr} | 仓位 {sig.suggested_position_pct:.0%} | 形态分 {sig.confidence:.0%}\n"
+            if sig.zone_status != "none":
+                content += f"盈亏比 {sig.risk_reward_text()} | 仓位 {sig.suggested_position_pct:.0%}"
+            else:
+                content += "仓位 0%（只观察）"
+            content += f" | 形态分 {sig.confidence:.0%}\n"
             if sig.atr_value:
                 content += f"ATR波动 {sig.atr_value:.2f} | "
             content += f"现价 {sig.current_price:.2f}\n"

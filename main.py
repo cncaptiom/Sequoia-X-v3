@@ -547,8 +547,11 @@ def _run_daily(settings, logger, engine, notifier) -> None:
             # 记录推荐到数据库：只记实际推送给用户的那批（与 push_feishu 的
             # DISPLAY_TOP_N 一致），否则命中率统计的分母会和用户看到的名单不符
             from sequoia_x.tracker import RecommendationTracker
+            top_signals = report_result.top_n(DISPLAY_TOP_N)
+            _apply_portfolio_positions(top_signals, regime.suggested_exposure)
+            report_result.signals = top_signals
             tracker = RecommendationTracker(engine.db_path)
-            tracker.record_signals(report_result.top_n(DISPLAY_TOP_N))
+            tracker.record_signals(top_signals)
 
             # 终端打印推荐报告
             report_gen = ReportGenerator(notifier)
@@ -826,6 +829,18 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                     conf_score += 0.10
                 # 截断到1.0
                 confidence = round(max(min(conf_score, 1.0), 0.05), 3)
+                # 兜底构建也要带区间状态，否则组合仓位分配会把它当成不可买
+                if entry_low > 0 and entry_high > 0:
+                    if r.current_price > entry_high:
+                        zone_status, zone_reason, entry_ref = "outside", "", r.current_price
+                    elif r.current_price < entry_low:
+                        zone_status, zone_reason, entry_ref = "below", "已跌破买入区间", 0.0
+                    else:
+                        zone_status, zone_reason, entry_ref = "inside", "", r.current_price
+                else:
+                    zone_status, zone_reason, entry_ref = "none", "无有效支撑", 0.0
+                from sequoia_x.signal.pricing import compute_risk_reward
+                rr_obj = compute_risk_reward(entry_ref, stop_loss, tp1) if entry_ref else None
                 sname = r.name or stock_names.get(r.symbol, r.symbol)
                 sig = TradeSignal(
                     symbol=r.symbol, name=sname,
@@ -841,6 +856,11 @@ def _run_rating(settings, logger, engine, notifier) -> None:
                     suggested_position_pct=pos_pct,
                     confidence=confidence,
                     score_details=r.strategy_scores or {},
+                    zone_status=zone_status,
+                    zone_reason=zone_reason,
+                    entry_ref=round(entry_ref, 2),
+                    risk_reward=rr_obj.value if rr_obj else None,
+                    risk_reward_capped=rr_obj.capped if rr_obj else False,
                     market_regime=regime.label,
                     rationale=f"评级{r.rating_label}，总分{r.total_score:.1f}，{sname}进入买入区间",
                 )
@@ -864,6 +884,8 @@ def _run_rating(settings, logger, engine, notifier) -> None:
         pool_key = {r.symbol: _production_key(r) for r in candidates}
         signals.sort(key=lambda s: (pool_key.get(s.symbol, (9, 0.0)), -s.confidence))
         signals = signals[:DISPLAY_TOP_N]
+        # 总仓位只分给可买标的（区间内 / 高于区间均按现价买），只观察的记 0
+        _apply_portfolio_positions(signals, regime.suggested_exposure)
         logger.info(f"推送名单 {len(signals)} 只（排序：评级 → 总分 → 形态分）")
 
         # 记录推荐到数据库：与飞书推送的名单保持一致，
@@ -899,6 +921,20 @@ def _run_rating(settings, logger, engine, notifier) -> None:
             raise CoreStepFailure(f"COS 上传异常: {exc}") from exc
         if not ok:
             raise CoreStepFailure("COS 上传未全部成功（手机端可能拿到旧数据）")
+
+
+def _apply_portfolio_positions(signals, total_exposure: float, cap: float = 0.15) -> None:
+    """把 regime 总仓位只分给「可买」的标的（区间内/高于区间均按现价买），只观察的记 0。
+
+    单票 = min(总仓位 / 可买只数, 单票硬顶)。与 REVIEW-2026-11-03 S4 口径一致，
+    不再让 PositionSizer 的 15% 饱和值直接出现在卡片上。
+    """
+    actionable = [s for s in signals
+                  if s.zone_status in ("inside", "outside") and s.entry_ref > 0]
+    per = min(total_exposure / len(actionable), cap) if actionable else 0.0
+    for s in signals:
+        ok = s.zone_status in ("inside", "outside") and s.entry_ref > 0
+        s.suggested_position_pct = round(per, 4) if ok else 0.0
 
 
 def _run_backtest(settings, logger, engine) -> None:

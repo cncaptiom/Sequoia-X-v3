@@ -46,6 +46,13 @@ class TradeSignal:
     confidence: float = 0.0               # 综合形态分 0~1
     score_details: dict[str, float] = field(default_factory=dict)  # 各维度细分得分
 
+    # 买入区间状态（定义见 signal/pricing.py）
+    zone_status: str = ""                 # inside / outside / below / none
+    zone_reason: str = ""                 # status 为 none 时的原因
+    entry_ref: float = 0.0                # 盈亏比参考入场价（区间内=现价，区间外=上轨）
+    risk_reward: Optional[float] = None   # 统一函数算出的盈亏比；None 表示不可算
+    risk_reward_capped: bool = False      # 是否已按上限截断
+
     # 市场环境
     market_regime: str = ""               # 当前市场状态（强牛/弱牛/震荡/弱熊/强熊）
 
@@ -57,29 +64,33 @@ class TradeSignal:
         parts = [
             f"{self.name}({self.symbol})",
             f"策略:{','.join(self.strategies)}",
-            f"买入:{self.entry_zone_low:.2f}~{self.entry_zone_high:.2f}",
-            f"止损:{self.stop_loss:.2f}",
-            f"目标1:{self.take_profit_1:.2f}",
         ]
-        if self.take_profit_2:
-            parts.append(f"目标2:{self.take_profit_2:.2f}")
-        parts.append(f"仓位:{self.suggested_position_pct:.0%}")
+        if self.zone_status == "none":
+            parts.append(f"只观察:{self.zone_reason}")
+        else:
+            parts.append(f"支撑区:{self.entry_zone_low:.2f}~{self.entry_zone_high:.2f}")
+            parts.append(f"止损:{self.stop_loss:.2f}")
+            parts.append(f"目标1:{self.take_profit_1:.2f}")
+            if self.take_profit_2:
+                parts.append(f"目标2:{self.take_profit_2:.2f}")
+            parts.append(f"仓位:{self.suggested_position_pct:.0%}")
         if self.rating_label:
             parts.append(f"评级:{self.rating_label}")
         parts.append(f"形态分:{self.confidence:.0%}")
         parts.append(self.rationale[:30])
         return " | ".join(parts)
 
-    def risk_reward_ratio(self) -> float:
-        """计算盈亏比 = (目标价 - 买入价) / (买入价 - 止损价)。"""
-        entry_mid = (self.entry_zone_low + self.entry_zone_high) / 2
-        if entry_mid <= 0:
-            return 0.0
-        reward = self.take_profit_1 - entry_mid
-        risk = entry_mid - self.stop_loss
-        if risk <= 0:
-            return 99.0
-        return round(reward / risk, 2)
+    def risk_reward_ratio(self) -> Optional[float]:
+        """统一函数算出的盈亏比；None 表示止损过近/目标无效，不可计算。"""
+        return self.risk_reward
+
+    def risk_reward_text(self) -> str:
+        """展示用文案：— / ≥10 / 2.35。"""
+        if self.risk_reward is None:
+            return "—"
+        if self.risk_reward_capped:
+            return f"≥{self.risk_reward:g}"
+        return f"{self.risk_reward:.2f}"
 
 
 @dataclass

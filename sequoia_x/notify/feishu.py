@@ -375,7 +375,7 @@ class FeishuNotifier:
                 )
                 content = (
                     f"**{r.name or r.symbol} ({r.symbol})**  "
-                    f"总分: {r.total_score}  |  盈亏比: {r.risk_reward_ratio}:1\n"
+                    f"总分: {r.total_score}  |  盈亏比: {r.risk_reward_text}\n"
                     f"现价: {r.current_price}  |  止损: {r.stop_loss_price or '-'}  |  "
                     f"止盈: {r.take_profit_price or '-'}\n"
                     f"策略得分: {scores_str}\n"
@@ -400,7 +400,7 @@ class FeishuNotifier:
                 )
                 lines.append(
                     f"**{r.name or r.symbol} ({r.symbol})**  "
-                    f"总分 {r.total_score}  RR {r.risk_reward_ratio}:1  |  {scores_summary}"
+                    f"总分 {r.total_score}  RR {r.risk_reward_text}  |  {scores_summary}"
                 )
             elements.append({
                 "tag": "div",

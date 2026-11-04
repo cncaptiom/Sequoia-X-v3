@@ -99,6 +99,10 @@ class PcDataProvider extends ChangeNotifier {
         rec['max_hold_days'] = sig.maxHoldDays;
         rec['rationale'] = sig.rationale;
         rec['risk_reward_ratio'] = sig.riskRewardRatio;
+        rec['risk_reward_text'] = sig.riskRewardText;
+        rec['zone_status'] = sig.zoneStatus;
+        rec['zone_reason'] = sig.zoneReason;
+        rec['entry_ref'] = sig.entryRef;
         rec['level_label'] = sig.levelLabel;
       } else {
         if (r.buyRange.isNotEmpty) {
@@ -111,6 +115,9 @@ class PcDataProvider extends ChangeNotifier {
         if (r.stopLossPrice != null) rec['stop_loss'] = r.stopLossPrice;
         if (r.takeProfitPrice != null) rec['target_1'] = r.takeProfitPrice;
         rec['risk_reward_ratio'] = r.riskRewardRatio;
+        rec['risk_reward_text'] = r.riskRewardText;
+        rec['zone_status'] = r.zoneStatus;
+        rec['zone_reason'] = r.zoneReason;
       }
       map[r.symbol] = rec;
     }
@@ -253,7 +260,11 @@ class PcDataProvider extends ChangeNotifier {
             'entry_condition': sig.entryCondition, 'stop_loss': sig.stopLoss,
             'target_1': sig.target1, 'target_2': sig.target2, 'max_hold_days': sig.maxHoldDays,
             'risk_pct': sig.riskPct, 'reward_pct': sig.rewardPct,
-            'risk_reward_ratio': sig.riskRewardRatio, 'position_pct': sig.positionPct,
+            'risk_reward_ratio': sig.riskRewardRatio,
+            'risk_reward_text': sig.riskRewardText,
+            'zone_status': sig.zoneStatus, 'zone_reason': sig.zoneReason,
+            'entry_ref': sig.entryRef,
+            'position_pct': sig.positionPct,
             'atr': sig.atr, 'score_details': sig.scoreDetails, 'rationale': sig.rationale,
           }).toList(),
         });

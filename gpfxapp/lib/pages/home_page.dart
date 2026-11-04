@@ -429,6 +429,8 @@ class _HomePageState extends State<HomePage>
         final stopLoss = (pcRating.stopLossPrice as num?)?.toDouble();
         final takeProfit = (pcRating.takeProfitPrice as num?)?.toDouble();
         final rr = (pcRating.riskRewardRatio as num?)?.toDouble() ?? 0;
+        final rrDisplay = (pcRating.riskRewardText as String?) ?? '';
+        final zoneStatus = (pcRating.zoneStatus as String?) ?? '';
 
         buyZoneText = buyRange;
 
@@ -460,7 +462,12 @@ class _HomePageState extends State<HomePage>
                   actionColor = AppTheme.textHint;
                 }
               } else {
-                actionText = '等待';
+                // 区间只作风险参考：高于区间仍可按现价买，但标注追高
+                actionText = '追高';
+                actionColor = AppTheme.signalHold;
+              }
+              if (zoneStatus == 'none') {
+                actionText = '观察';
                 actionColor = AppTheme.textHint;
               }
               final midPrice = (entryLow + entryHigh) / 2;
@@ -475,7 +482,16 @@ class _HomePageState extends State<HomePage>
 
         if (stopLoss != null) stopLossText = stopLoss.toStringAsFixed(2);
         if (takeProfit != null) takeProfitText = takeProfit.toStringAsFixed(2);
-        if (rr > 0) rrText = '盈亏比 ${rr.toStringAsFixed(1)}:1';
+        if (rr > 0) {
+          rrText = '盈亏比 ${rr.toStringAsFixed(1)}:1';
+        } else if (rrDisplay.isNotEmpty && rrDisplay != '—') {
+          rrText = '盈亏比 $rrDisplay';
+        }
+        if (zoneStatus == 'none') {
+          buyZoneText = '本期只观察';
+          actionText = '观察';
+          actionColor = AppTheme.textHint;
+        }
       }
     } catch (_) {}
 

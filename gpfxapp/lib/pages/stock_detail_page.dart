@@ -377,6 +377,12 @@ class StockDetailPage extends StatelessWidget {
     final double rr = hasPc
         ? ((pcRating.riskRewardRatio as num?)?.toDouble() ?? 0)
         : (analysis?.riskRewardRatio ?? 0);
+    final String rrDisplay = hasPc
+        ? ((pcRating.riskRewardText as String?) ?? '')
+        : (signal?.riskRewardText ?? '');
+    final String zoneStatus = hasPc
+        ? ((pcRating.zoneStatus as String?) ?? '')
+        : (signal?.zoneStatus ?? '');
     final double? stopLoss = hasPc
         ? (pcRating.stopLossPrice as num?)?.toDouble()
         : analysis?.stopLossPrice;
@@ -461,10 +467,10 @@ class StockDetailPage extends StatelessWidget {
       conText = "评级回避";
       sigText = "等待后续";
     } else if (entryLow <= 0 || entryHigh <= 0) {
-      action = "等待";
+      action = "观察";
       actionColor = AppTheme.textHint;
-      aggText = "无数据";
-      conText = "数据不足";
+      aggText = zoneStatus == 'none' ? "只观察" : "无数据";
+      conText = zoneStatus == 'none' ? "本期只观察" : "数据不足";
       sigText = "-";
     } else {
       deviation =
@@ -526,11 +532,12 @@ class StockDetailPage extends StatelessWidget {
           }
         }
       } else {
-        action = "等待";
-        actionColor = AppTheme.textHint;
-        aggText = "不追高";
-        conText = "等回踩${entryLow.toStringAsFixed(2)}";
-        sigText = "等回调信号";
+        // 区间只作风险参考：高于区间仍可按现价买，但明确标注追高
+        action = "追高";
+        actionColor = AppTheme.signalHold;
+        aggText = "高于支撑区";
+        conText = "可按现价买，注意追高";
+        sigText = "止损${stopLoss?.toStringAsFixed(2) ?? '-'}";
       }
     }
 
@@ -617,6 +624,11 @@ class StockDetailPage extends StatelessWidget {
                   Text('盈亏比 ${rr.toStringAsFixed(1)}:1',
                       style: const TextStyle(
                           fontSize: 12, color: AppTheme.textHint)),
+                ] else if (rrDisplay.isNotEmpty && rrDisplay != '—') ...[
+                  const SizedBox(width: 8),
+                  Text('盈亏比 $rrDisplay',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppTheme.textHint)),
                 ],
                 if (deviation != 0) ...[
                   const SizedBox(width: 8),
@@ -648,6 +660,8 @@ class StockDetailPage extends StatelessWidget {
             children: [
               if (buyRange.isNotEmpty)
                 _infoTag('区间', buyRange, const Color(0xFF1565C0)),
+              if (zoneStatus == 'none')
+                _infoTag('状态', '只观察', AppTheme.textHint),
               if (stopLoss != null)
                 _infoTag('止损', stopLoss.toStringAsFixed(2), AppTheme.downColor),
               if (takeProfit != null)

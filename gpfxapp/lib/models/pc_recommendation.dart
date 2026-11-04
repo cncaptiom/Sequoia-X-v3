@@ -37,6 +37,9 @@ class PcRatingResult {
   final Map<String, double> categoryScores;
   final List<PcSignal> signals;
   final double riskRewardRatio;
+  final String riskRewardText;
+  final String zoneStatus;
+  final String zoneReason;
   final double? stopLossPrice;
   final double? takeProfitPrice;
   final String buyRange;
@@ -56,6 +59,9 @@ class PcRatingResult {
     required this.categoryScores,
     required this.signals,
     required this.riskRewardRatio,
+    this.riskRewardText = '—',
+    this.zoneStatus = '',
+    this.zoneReason = '',
     this.stopLossPrice,
     this.takeProfitPrice,
     required this.buyRange,
@@ -81,6 +87,9 @@ class PcRatingResult {
               .toList() ??
           [],
       riskRewardRatio: (json['risk_reward_ratio'] as num?)?.toDouble() ?? 0,
+      riskRewardText: json['risk_reward_text'] as String? ?? '—',
+      zoneStatus: json['zone_status'] as String? ?? '',
+      zoneReason: json['zone_reason'] as String? ?? '',
       stopLossPrice: (json['stop_loss_price'] as num?)?.toDouble(),
       takeProfitPrice: (json['take_profit_price'] as num?)?.toDouble(),
       buyRange: json['buy_range'] as String? ?? '',
