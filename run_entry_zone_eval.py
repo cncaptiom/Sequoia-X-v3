@@ -7,8 +7,8 @@
   · 两条腿用同一套止损/目标与退出规则，按交易日做配对比较
 
 ⚠️ 本脚本评估的是「等回调」策略。生产最终采用「区间只作风险参考、可买的按现价
-买」（方案 A）：可执行口径下等回调跑输 0.63pp/10日，过滤口径仅 -0.07pp
-（见 CHANGELOG 二十九）。保留脚本是为了后续标定可复现。
+买」（方案 A）。目标与准入都锚在信号日收盘价（与生产一致），不再锚区间上轨 U。
+可执行口径下等回调跑输、过滤口径接近无差别（见 CHANGELOG 二十九）。
 
 输出 output/entry_zone_eval.json。
 """
@@ -43,6 +43,7 @@ from sequoia_x.signal.pricing import (
     build_entry_zone,
     compute_risk_reward,
     entry_reference,
+    original_stop_price,
     pick_target,
     plan_risk_ok,
     stop_price,
@@ -84,9 +85,8 @@ def _levels(df: pd.DataFrame, i: int) -> dict:
     if ma60 is not None:
         supports["MA60"] = ma60
 
-    # 与 generator 现行止损公式一致，作为「更深的那个」的对照
-    original_stop = max(price - 2 * atr, ma20 * 0.97, low10 * 0.98)
-    original_stop = min(original_stop, price * 0.95)
+    # 与 generator 共用同一份「原止损」定义
+    original_stop = original_stop_price(price, atr, ma20, low10)
 
     return {
         "price": price, "atr": atr, "ma20": ma20, "ma5": ma5,
@@ -283,8 +283,8 @@ def main() -> None:
                     recs.append(rec)
                     continue
                 stop = stop_price(zone.low, lv["atr"], lv["original_stop"])
-                target = pick_target(lv["resistances"], zone.high, lv["atr"])
-                if not plan_risk_ok(zone.high, stop):
+                # 目标与准入锚信号日收盘价（生产 A 口径；等待腿的成交价仍是 U）
+                if not plan_risk_ok(lv["price"], stop):
                     j_cal = i + 1 + FIXED_DAYS
                     if i + 1 < len(df) and j_cal < len(df):
                         chase_cal = (float(df["close"].iloc[j_cal])
@@ -295,6 +295,7 @@ def main() -> None:
                     rec.update(status="none", reason="止损距离不足", tradable=False, rr=None)
                     recs.append(rec)
                     continue
+                target = pick_target(lv["resistances"], lv["price"], lv["atr"]).value
                 entry = entry_reference(zone, lv["price"])
                 rr = compute_risk_reward(entry, stop, target)
                 plan = _simulate_plan(df, i, zone, stop, target)

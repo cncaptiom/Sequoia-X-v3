@@ -1039,6 +1039,9 @@ S/A/B/C/D 等级贴在股票名旁，飞书还把它写成「评级: 信号偏�
 - 事后按成交名单再分配 +0.51pp 的结果**需要预知成交，不可执行**，不作为依据
 - MA5 锚熊市空集率 63%，不可用
 - 结论：采用「支撑锚 + k=0.5 + 区间只作风险参考」；空集率 26.5%
+- 标定脚本的目标/准入已改为锚信号日收盘价（与生产 A 一致）；上述两条结论用的是
+  10 日对齐/过滤口径，均不依赖目标锚，数值不变。20 日计划口径的差值随之更新
+  （k=0.5：区间外 -0.33pp，t=-1.69），见 `output/entry_zone_eval.json`
 
 **测试**：`tests/test_pricing.py` 13 条性质测试（区间/止损/盈亏比/准入）。
 
@@ -1052,3 +1055,12 @@ S/A/B/C/D 等级贴在股票名旁，飞书还把它写成「评级: 信号偏�
 - 当日网络异常：新浪快照 SSLError、baostock 登录失败 → 同步写入 0 条，实际使用 11-03 数据
 - 名称表落盘缓存 `data/name_cache.json`（7 天有效期）：断网时用上次成功名单，
   避免卡片只剩股票代码；已用 2026-10-27 的评级导出初始化 4953 个名称
+
+**审阅修正（2026-11-04，第一批）**：处理 `USER-VERSION-REVIEW.pdf` 的纯缺陷项。
+
+- 兜底路径不再用 `现价×0.97 / ×1.01` 造区间；评级未给完整买卖点时一律 `zone_status=none`（I-4）
+- `--daily` 的 COS 上传改用归一后的 Top15，不再上传 16 名之后的未归一仓位（I-5）
+- `signals/today.json` 无区间时 `entry_low/entry_high/entry_ref/stop_loss/target_*` 导出 `null`（I-6）
+- 目标兜底加 `target_is_fallback` 并在卡片标注「ATR 兜底」；删除 `target_2=×1.08` 的人造值（J-3）
+- 「原 ATR 止损」收敛到 `pricing.original_stop_price`，generator / rating engine / 标定脚本共用（J-6）
+- 修正 `models.py` 里过时的 `entry_ref` 注释（J-4）；去掉构造上不可达的 below 分支（J-1）
