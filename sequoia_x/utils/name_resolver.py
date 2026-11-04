@@ -1,11 +1,19 @@
 """股票名称解析器：带缓存的股票名查询（mootdx 主用，baostock 备选）。"""
 
+import time
+
+
 class NameResolver:
     """股票名称解析器，批量查询并缓存结果。"""
 
     def __init__(self):
         self._names: dict[str, str] = {}
         self._loaded = False
+        self._failed_at: float = 0.0
+
+    # 两个数据源都不可用时的退避时间：期间直接回退股票代码，
+    # 避免每只股票都重新等 mootdx+baostock 的 13 秒超时。
+    _RETRY_SECONDS = 300.0
 
     # mootdx 走 TCP，数据源不可达时不是报错而是**挂住**（它的 K 线接口已经死过一次），
     # 所以必须放进超时里调用。
@@ -13,6 +21,8 @@ class NameResolver:
 
     def _load_all(self) -> None:
         if self._loaded:
+            return
+        if self._failed_at and time.time() - self._failed_at < self._RETRY_SECONDS:
             return
 
         # 优先使用 mootdx（TCP 协议，不封 IP）
@@ -46,13 +56,15 @@ class NameResolver:
             t = threading.Thread(target=_bs_login, daemon=True)
             t.start()
             t.join(timeout=5)
-            if t.is_alive():
-                return
             if result[0]:
                 self._names = result[0]
                 self._loaded = True
+                return
         except Exception:
             pass
+
+        # 两个源都失败：退避 5 分钟，期间 get_name 直接回退代码
+        self._failed_at = time.time()
 
     def _try_mootdx(self) -> dict[str, str] | None:
         """mootdx 取全市场股票名；超时或失败返回 None。
