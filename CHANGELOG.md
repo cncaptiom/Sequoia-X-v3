@@ -1060,7 +1060,8 @@ S/A/B/C/D 等级贴在股票名旁，飞书还把它写成「评级: 信号偏�
 
 - 兜底路径不再用 `现价×0.97 / ×1.01` 造区间；评级未给完整买卖点时一律 `zone_status=none`（I-4）
 - `--daily` 的 COS 上传改用归一后的 Top15，不再上传 16 名之后的未归一仓位（I-5）
-- `signals/today.json` 无区间时 `entry_low/entry_high/entry_ref/stop_loss/target_*` 导出 `null`（I-6）
+- `signals/today.json` 无区间时 `entry_low/entry_high/entry_ref/stop_loss/target_*` 导出 `null`（I-6）；
+  第二个导出 `upload_recommendations` 同步加 `has_zone` 守卫与 `zone_status`/`entry_ref`/`risk_reward_*` 字段
 - 目标兜底加 `target_is_fallback` 并在卡片标注「ATR 兜底」；删除 `target_2=×1.08` 的人造值（J-3）
 - 「原 ATR 止损」收敛到 `pricing.original_stop_price`，generator / rating engine / 标定脚本共用（J-6）
 - 修正 `models.py` 里过时的 `entry_ref` 注释（J-4）；去掉构造上不可达的 below 分支（J-1）
