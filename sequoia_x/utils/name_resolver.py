@@ -1,19 +1,57 @@
 """股票名称解析器：带缓存的股票名查询（mootdx 主用，baostock 备选）。"""
 
+import json
+import os
 import time
+from pathlib import Path
 
 
 class NameResolver:
-    """股票名称解析器，批量查询并缓存结果。"""
+    """股票名称解析器，批量查询并缓存结果。
+
+    名称表会落盘到 data/name_cache.json：断网时用上次成功的缓存，
+    避免卡片上只剩股票代码。
+    """
+
+    _CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "name_cache.json"
+    # 两个数据源都不可用时的退避时间：期间直接回退（缓存或代码），
+    # 避免每只股票都重新等 mootdx+baostock 的 13 秒超时。
+    _RETRY_SECONDS = 300.0
+    # 缓存超过 7 天会尝试联网刷新；刷新失败仍沿用旧缓存
+    _CACHE_TTL_SECONDS = 7 * 86400
 
     def __init__(self):
         self._names: dict[str, str] = {}
         self._loaded = False
         self._failed_at: float = 0.0
+        self._cache_checked = False
 
-    # 两个数据源都不可用时的退避时间：期间直接回退股票代码，
-    # 避免每只股票都重新等 mootdx+baostock 的 13 秒超时。
-    _RETRY_SECONDS = 300.0
+    def _load_cache_file(self) -> bool:
+        """读取磁盘缓存；返回缓存是否仍在有效期内。"""
+        try:
+            with open(self._CACHE_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            names = data.get("names") or {}
+            saved_at = float(data.get("saved_at") or 0)
+            if not names:
+                return False
+            self._names = {str(k).zfill(6): str(v) for k, v in names.items()}
+            return (time.time() - saved_at) < self._CACHE_TTL_SECONDS
+        except Exception:
+            return False
+
+    def _save_cache_file(self) -> None:
+        try:
+            self._CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._CACHE_PATH.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(
+                    {"saved_at": time.time(), "names": self._names},
+                    f, ensure_ascii=False,
+                )
+            os.replace(tmp, self._CACHE_PATH)
+        except Exception:
+            pass
 
     # mootdx 走 TCP，数据源不可达时不是报错而是**挂住**（它的 K 线接口已经死过一次），
     # 所以必须放进超时里调用。
@@ -22,7 +60,18 @@ class NameResolver:
     def _load_all(self) -> None:
         if self._loaded:
             return
+
+        # 先看磁盘缓存：有效期内直接用，断网也能给出真实名称
+        if not self._cache_checked:
+            self._cache_checked = True
+            if self._load_cache_file():
+                self._loaded = True
+                return
+            # 过期缓存保留为兜底，继续尝试联网刷新
+
         if self._failed_at and time.time() - self._failed_at < self._RETRY_SECONDS:
+            if self._names:
+                self._loaded = True
             return
 
         # 优先使用 mootdx（TCP 协议，不封 IP）
@@ -30,6 +79,7 @@ class NameResolver:
         if names:
             self._names = names
             self._loaded = True
+            self._save_cache_file()
             return
 
         # 降级到 baostock（带超时保护，防止卡死）
@@ -59,12 +109,17 @@ class NameResolver:
             if result[0]:
                 self._names = result[0]
                 self._loaded = True
+                self._save_cache_file()
                 return
         except Exception:
             pass
 
-        # 两个源都失败：退避 5 分钟，期间 get_name 直接回退代码
-        self._failed_at = time.time()
+        if self._names:
+            # 联网失败但有旧缓存：用旧名称，本次进程不再重试
+            self._loaded = True
+        else:
+            # 两个源都失败且无缓存：退避 5 分钟，期间 get_name 直接回退代码
+            self._failed_at = time.time()
 
     def _try_mootdx(self) -> dict[str, str] | None:
         """mootdx 取全市场股票名；超时或失败返回 None。
