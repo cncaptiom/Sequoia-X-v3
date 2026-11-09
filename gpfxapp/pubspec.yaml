@@ -20,6 +20,9 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
 
+  # COS 密钥等敏感凭证（Android Keystore / iOS Keychain）
+  flutter_secure_storage: ^9.2.2
+
   # 图表
   fl_chart: ^0.70.0
 

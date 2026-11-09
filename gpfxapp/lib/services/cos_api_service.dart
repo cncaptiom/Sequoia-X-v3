@@ -161,13 +161,21 @@ class CosApiService {
           await Future.delayed(const Duration(seconds: 2));
           continue;
         }
-        return null; // 重试仍失败返回 null，不抛异常
+        // 重试仍失败必须抛出来：返回 null 会让调用方把"网络失败"当成
+        // "当天还没生成数据"，还会顺手把错误状态清空（2026-11-09 审查 #8）。
+        rethrow;
       }
     }
     return null;
   }
 
   // ── API 接口 ──
+
+  /// 批次清单（manifest.json）。PC 端所有文件全部上传成功后才发布，
+  /// 手机端据此确认这一批数据是否完整、是否来自同一次运行。
+  Future<Map<String, dynamic>?> fetchManifest() async {
+    return await _getJson('manifest.json');
+  }
 
   /// 获取PC端全市场评级数据（大文件，使用长超时 + 自动重试）
   Future<PcFullRatings?> fetchFullRatings() async {

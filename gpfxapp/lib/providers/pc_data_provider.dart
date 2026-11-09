@@ -278,65 +278,106 @@ class PcDataProvider extends ChangeNotifier {
 
   // ── 刷新 ──
 
+  /// 刷新序号：每次 refresh 自增，只有序号仍然最新的那次才允许写状态。
+  /// 定时刷新与手动刷新可能并发，先发出的请求可能后返回并覆盖新数据（审查 #13）。
+  int _refreshSeq = 0;
+
   Future<void> refresh() async {
+    final seq = ++_refreshSeq;
     _isLoading = true;
     notifyListeners();
+
+    PcPortfolioSummary? newSummary;
+    PcFullRatings? newRatings;
+    Map<String, dynamic>? newBacktest;
+    PcSignalList? newSignals;
+    String? fatalError;
+    String? ratingsError;
+
     try {
-      // 三个 COS 请求独立执行、独立错误处理
-      bool summaryFetched = false;
+      // ── 先取批次清单：所有文件必须是同一次 PC 运行的产物 ──
+      Map<String, dynamic>? manifest;
+      try {
+        manifest = await _cos.fetchManifest();
+      } catch (_) {
+        manifest = null;
+      }
+      final expectedRunId = (manifest?['run_id'] as String?) ?? '';
+      final listed = (manifest?['files'] as List?)?.map((e) => '$e').toSet() ??
+          const <String>{};
+
       // 摘要 — 必须成功（否则设为 error）
       try {
-        final newSummary = await _cos.fetchPortfolioSummary();
-        if (newSummary != null) {
-          _summary = newSummary;
-          summaryFetched = true;
-        }
+        newSummary = await _cos.fetchPortfolioSummary();
       } catch (e) {
-        _error = 'PC端摘要加载失败: $e';
+        fatalError = 'PC端摘要加载失败: $e';
       }
 
-      bool ratingsFetched = false;
       // 全量评级 — 大文件(5MB)，失败不影响首页
       try {
-        final newRatings = await _cos.fetchFullRatings();
-        if (newRatings != null) {
-          _fullRatings = newRatings;
-          _ratingsMap = {};
-          for (final r in _fullRatings!.ratings) {
-            _ratingsMap[r.symbol] = r;
-          }
-          ratingsFetched = true;
-        }
-        _ratingsError = null;
+        newRatings = await _cos.fetchFullRatings();
+        ratingsError = null;
       } catch (e) {
-        // 评级加载失败不覆盖 _error，首页摘要仍可展示
         debugPrint('全量评级加载失败（已降级）: $e');
-        _ratingsError = '评级数据加载失败，详情页评级可能不是最新';
+        ratingsError = '评级数据加载失败，详情页评级可能不是最新';
       }
 
       // 策略回测 — 独立
       try {
-        final bt = await _cos.fetchStrategyBacktest();
-        if (bt != null) _strategyBacktest = bt;
+        newBacktest = await _cos.fetchStrategyBacktest();
       } catch (_) {}
 
-      // 完整操作信号（signals/today.json）— 独立，失败不影响其他
+      // 完整操作信号（signals/today.json）— 独立
       try {
-        final newSignals = await _cos.fetchSignals();
-        if (newSignals != null) {
-          _signals = newSignals;
-          _signalsMap = {};
-          for (final s in _signals!.signals) {
-            _signalsMap[s.symbol] = s;
-          }
-        }
-      } catch (_) {}
+        newSignals = await _cos.fetchSignals();
+      } catch (e) {
+        debugPrint('操作信号加载失败（已降级）: $e');
+      }
 
-      // 仅当本次确实拉到新数据时清除 error 并更新时间戳（避免失败时误导"数据更新于"）
-      if (summaryFetched || ratingsFetched) {
+      // 被更新的一次刷新取代：丢弃本次结果，不写任何状态
+      if (seq != _refreshSeq) return;
+
+      // ── 批次一致性校验 ──
+      final mismatch = _checkBatch(
+        expectedRunId: expectedRunId,
+        listed: listed,
+        summary: newSummary,
+        ratings: newRatings,
+        signals: newSignals,
+      );
+      if (mismatch != null) {
+        // 保留旧数据，整体标记为不完整，不静默混合
+        _error = mismatch;
+        _isLoading = false;
+        notifyListeners();
+        return;
+      }
+
+      // ── 落地 ──
+      if (newSummary != null) _summary = newSummary;
+      if (newRatings != null) {
+        _fullRatings = newRatings;
+        _ratingsMap = {};
+        for (final r in _fullRatings!.ratings) {
+          _ratingsMap[r.symbol] = r;
+        }
+      }
+      if (newBacktest != null) _strategyBacktest = newBacktest;
+      if (newSignals != null) {
+        _signals = newSignals;
+        _signalsMap = {};
+        for (final s in _signals!.signals) {
+          _signalsMap[s.symbol] = s;
+        }
+      }
+
+      if (fatalError != null) {
+        _error = fatalError;
+      } else if (newSummary != null || newRatings != null) {
         _error = null;
         _lastFetch = DateTime.now();
       }
+      _ratingsError = ratingsError;
 
       // 后续处理
       _syncAutoRecommend();
@@ -363,9 +404,46 @@ class PcDataProvider extends ChangeNotifier {
         }
       }
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      if (seq == _refreshSeq) {
+        _isLoading = false;
+        notifyListeners();
+      }
     }
+  }
+
+  /// 校验这一批数据是否完整且同源。返回错误文案，通过则返回 null。
+  ///
+  /// 旧实现在没有 manifest 时只看各请求是否成功，各文件独立更新，
+  /// 新评级配旧信号的情况不会被发现（2026-11-09 审查 #8）。
+  String? _checkBatch({
+    required String expectedRunId,
+    required Set<String> listed,
+    required PcPortfolioSummary? summary,
+    required PcFullRatings? ratings,
+    required PcSignalList? signals,
+  }) {
+    // 没有 manifest（旧版 PC 端）→ 退回逐文件判断，不做批次强校验
+    if (expectedRunId.isEmpty) return null;
+
+    bool missing(String path, bool fetched) =>
+        listed.contains(path) && !fetched;
+
+    if (missing('summary/today.json', summary != null) ||
+        missing('ratings/today.json', ratings != null) ||
+        missing('signals/today.json', signals != null)) {
+      return 'PC端数据不完整（与 manifest 不一致），已保留上一批数据';
+    }
+
+    final runIds = <String>{
+      if (summary != null) summary.runId,
+      if (ratings != null) ratings.runId,
+      if (signals != null) signals.runId,
+    }..removeWhere((id) => id.isEmpty);
+
+    if (runIds.any((id) => id != expectedRunId)) {
+      return 'PC端数据批次不一致，已保留上一批数据';
+    }
+    return null;
   }
 
   // ── COS 配置管理 ──

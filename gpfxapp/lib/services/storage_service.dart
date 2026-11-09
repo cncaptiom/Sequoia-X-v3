@@ -1,3 +1,4 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/stock_info.dart';
 import '../models/strategy_config.dart';
@@ -9,6 +10,13 @@ class StorageService {
   static const String _strategyBox = 'strategy';
   static const String _settingsBox = 'settings';
   static const String _ratingBox = 'rating_history';
+
+  /// 敏感凭证走系统安全存储（Android Keystore / iOS Keychain）。
+  /// 不能再放 Hive：普通 Hive 箱是明文，设备备份或调试包泄露即等于泄露
+  /// 整个 COS 桶的凭证（2026-11-09 审查 #9）。
+  static const _secure = FlutterSecureStorage();
+  static const String _kCosSecretId = 'cosSecretId';
+  static const String _kCosSecretKey = 'cosSecretKey';
 
   static Future<void> init() async {
     await Hive.initFlutter();
@@ -186,20 +194,42 @@ class StorageService {
     await Hive.box(_settingsBox).put('cosRegion', region);
   }
 
-  Future<String> getCosSecretId() async {
-    return Hive.box(_settingsBox).get('cosSecretId', defaultValue: '') as String;
+  /// 读取敏感凭证：优先安全存储；旧版本留在 Hive 的明文值会自动迁移并删除。
+  Future<String> _readSecret(String key) async {
+    try {
+      final v = await _secure.read(key: key);
+      if (v != null && v.isNotEmpty) return v;
+    } catch (_) {
+      // 安全存储不可用（如部分桌面/测试环境）时退回旧位置，避免配置凭空消失
+    }
+    final legacy = Hive.box(_settingsBox).get(key, defaultValue: '') as String;
+    if (legacy.isNotEmpty) {
+      try {
+        await _secure.write(key: key, value: legacy);
+        await Hive.box(_settingsBox).delete(key);
+      } catch (_) {}
+    }
+    return legacy;
   }
+
+  Future<void> _writeSecret(String key, String value) async {
+    await _secure.write(key: key, value: value);
+    // 确保旧位置不再保留明文
+    if (Hive.box(_settingsBox).containsKey(key)) {
+      await Hive.box(_settingsBox).delete(key);
+    }
+  }
+
+  Future<String> getCosSecretId() async => _readSecret(_kCosSecretId);
 
   Future<void> setCosSecretId(String id) async {
-    await Hive.box(_settingsBox).put('cosSecretId', id);
+    await _writeSecret(_kCosSecretId, id);
   }
 
-  Future<String> getCosSecretKey() async {
-    return Hive.box(_settingsBox).get('cosSecretKey', defaultValue: '') as String;
-  }
+  Future<String> getCosSecretKey() async => _readSecret(_kCosSecretKey);
 
   Future<void> setCosSecretKey(String key) async {
-    await Hive.box(_settingsBox).put('cosSecretKey', key);
+    await _writeSecret(_kCosSecretKey, key);
   }
 
   Future<bool> getCosEnabled() async {

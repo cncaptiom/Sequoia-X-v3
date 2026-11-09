@@ -367,6 +367,10 @@ class AnalysisResult:
     zone_reason: str = ""
     risk_reward_text: str = "—"    # 不可算时为 —，截断时为 ≥10
     target_is_fallback: bool = False
+    # 基本面数据缺失（无财报）。缺失的股票**不参与** fundamental 权重，
+    # 也不能当成 0 分——低分与"没数据"是两件事（2026-11-09 审查 #10）。
+    fundamental_missing: bool = False
+    fundamental_report_date: str = ""   # 实际使用的财报报告期
 
     @property
     def rating_label(self) -> str:
@@ -461,9 +465,13 @@ class RatingEngine:
         total_score = 0.0
         strategy_scores: dict[str, float] = {}
 
-        # 如果基本面策略启用但没有传入财务数据，只在趋势通过的股票上获取
-        if self.config.fundamental_enabled and financial is None and symbol and trend_passed:
-            financial = self._fetch_financial(symbol)
+        # 基本面：全市场都尝试取一次（efinance 批量是查表），但**网络回退**
+        # 只给趋势通过的股票，避免 baostock 逐股风暴。取不到就标记缺失，
+        # 由 _combine_scores 自动重归一权重，而不是塞一个 0 分进标准化。
+        if self.config.fundamental_enabled and financial is None and symbol:
+            financial = self._fetch_financial(symbol, allow_network=trend_passed)
+        fundamental_missing = self.config.fundamental_enabled and not financial
+        fundamental_report_date = (financial or {}).get("report_date", "") or ""
 
         strategy_map: list[tuple[str, bool, callable]] = [
             ("maVolume", self.config.ma_volume_enabled, lambda: ma_volume_strategy(
@@ -486,6 +494,10 @@ class RatingEngine:
         ]
 
         for strategy_key, enabled, fn in strategy_map:
+            # 缺财报 → fundamental 不参与本次评分（权重由其他策略按比例分摊），
+            # 不能以 0 分计入，否则"没数据"会被误判成"基本面差"
+            if strategy_key == "fundamental" and fundamental_missing:
+                continue
             if enabled:
                 try:
                     result = fn()
@@ -557,6 +569,8 @@ class RatingEngine:
             risk_reward_text=risk_reward_text,
             target_is_fallback=target_is_fallback,
             current_price=round(last_close, 2),
+            fundamental_missing=fundamental_missing,
+            fundamental_report_date=fundamental_report_date,
         )
 
     def _get_normalized_weights(self) -> dict[str, float]:
@@ -750,8 +764,12 @@ class RatingEngine:
             throttle_interval=cls._BS_QUERY_INTERVAL, **kwargs,
         )
 
-    def _fetch_financial(self, symbol: str) -> dict | None:
-        """获取股票财务数据（带缓存）。优先 efinance 全市场批量，失败回退 baostock。"""
+    def _fetch_financial(self, symbol: str, allow_network: bool = True) -> dict | None:
+        """获取股票财务数据（带缓存）。优先 efinance 全市场批量，失败回退 baostock。
+
+        allow_network=False 时只用 efinance 批量结果（查表），不发起 baostock
+        逐股查询——用于"没通过趋势过滤"的股票，避免全市场逐股联网。
+        """
         if symbol in self._financial_cache:
             return self._financial_cache[symbol]
 
@@ -777,6 +795,8 @@ class RatingEngine:
             return efin
 
         # 回退：baostock 逐股查询（efinance 不可用或未覆盖该股）
+        if not allow_network:
+            return None
         # 延迟登录：整个扫描周期只登录一次
         if not getattr(RatingEngine, '_bs_logged_in', False):
             try:
@@ -918,6 +938,17 @@ class RatingEngine:
 
         # 截面标准化：使各策略评分尺度可比，重算 total_score 与评级
         self._cross_sectional_standardize(all_results)
+
+        # 基本面覆盖率：缺失的股票不参与 fundamental 权重（权重按比例分摊给其他类），
+        # 覆盖率过低时 fundamental 这一维实际上没在起作用，必须让人看得见
+        if self.config.fundamental_enabled and all_results:
+            missing = sum(1 for r in all_results if r.fundamental_missing)
+            covered = len(all_results) - missing
+            logger.info(
+                f"基本面覆盖率: {covered}/{len(all_results)} "
+                f"({covered / len(all_results):.1%})"
+                + ("；缺失股票不计 fundamental 权重（不做 0 分处理）" if missing else "")
+            )
 
         # 记录评分到 IC Tracker（用正交化前的原始分，保证每策略 IC 相互独立）
         if ic_tracker is not None:

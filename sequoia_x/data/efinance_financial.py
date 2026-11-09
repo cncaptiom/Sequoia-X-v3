@@ -179,6 +179,9 @@ def load_financial_all(force: bool = False) -> dict[str, dict]:
         if cfops is not None and eps and eps > 0:
             fin["cfo_to_np"] = round(cfops / eps, 2)
         if fin:
+            # 报告期随数据一起带出，便于回溯"当时用的是哪一季财报"
+            if report_date:
+                fin["report_date"] = report_date
             data[sym] = fin
 
     _AVAILABLE = True

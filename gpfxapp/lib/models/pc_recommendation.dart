@@ -111,6 +111,8 @@ class PcRatingResult {
 
 /// PC端全市场评级快照（完整数据）
 class PcFullRatings {
+  /// 本次 PC 运行的批次号。手机端据此拒绝混合不同批次的数据。
+  final String runId;
   final String version;
   final String date;
   final String generatedAt;
@@ -120,6 +122,7 @@ class PcFullRatings {
   final List<PcRatingResult> ratings;
 
   PcFullRatings({
+    this.runId = '',
     required this.version,
     required this.date,
     required this.generatedAt,
@@ -131,6 +134,7 @@ class PcFullRatings {
 
   factory PcFullRatings.fromJson(Map<String, dynamic> json) {
     return PcFullRatings(
+      runId: json['run_id'] as String? ?? '',
       version: json['version'] as String? ?? '',
       date: json['date'] as String? ?? '',
       generatedAt: json['generated_at'] as String? ?? '',
@@ -147,6 +151,8 @@ class PcFullRatings {
 
 /// PC端每日精选摘要（首页展示用）
 class PcPortfolioSummary {
+  /// 本次 PC 运行的批次号（见 PcFullRatings.runId）。
+  final String runId;
   final String date;
   final String generatedAt;
   final String marketRegime;
@@ -162,6 +168,7 @@ class PcPortfolioSummary {
   final Map<String, double> strategyBias;
 
   PcPortfolioSummary({
+    this.runId = '',
     required this.date,
     required this.generatedAt,
     required this.marketRegime,
@@ -175,6 +182,7 @@ class PcPortfolioSummary {
     final rawSummary = json['rating_summary'] as Map<String, dynamic>? ?? {};
     final rawBias = json['strategy_bias'] as Map<String, dynamic>? ?? {};
     return PcPortfolioSummary(
+      runId: json['run_id'] as String? ?? '',
       date: json['date'] as String? ?? '',
       generatedAt: json['generated_at'] as String? ?? '',
       marketRegime: json['market_regime'] as String? ?? '',

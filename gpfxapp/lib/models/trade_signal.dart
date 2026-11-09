@@ -106,6 +106,8 @@ class PcTradeSignal {
 
 /// PC端每日信号列表（signals/today.json）
 class PcSignalList {
+  /// 本次 PC 运行的批次号（见 PcFullRatings.runId）。
+  final String runId;
   final String marketRegime;
   final double suggestedExposure;
   final int totalSignals;
@@ -113,6 +115,7 @@ class PcSignalList {
   final List<PcTradeSignal> signals;
 
   PcSignalList({
+    this.runId = '',
     required this.marketRegime,
     required this.suggestedExposure,
     required this.totalSignals,
@@ -123,6 +126,7 @@ class PcSignalList {
   factory PcSignalList.fromJson(Map<String, dynamic> json) {
     final rawSummary = json['rating_summary'] as Map<String, dynamic>? ?? {};
     return PcSignalList(
+      runId: json['run_id'] as String? ?? '',
       marketRegime: json['market_regime'] as String? ?? '',
       suggestedExposure: (json['suggested_exposure'] as num?)?.toDouble() ?? 0,
       totalSignals: (json['total_signals'] as num?)?.toInt() ?? 0,
