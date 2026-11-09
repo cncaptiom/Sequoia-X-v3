@@ -58,3 +58,34 @@ def test_signals_actionable_keeps_numbers(uploader):
     assert item["stop_loss"] == 11.15
     assert item["risk_reward_ratio"] == 0.83
     assert item["target_is_fallback"] is True
+
+
+def test_metadata_carries_run_id_and_data_as_of():
+    """每个文件都要带同一个 run_id 和真实行情日期（不是运行日期）。"""
+    up = CosUploader("dummy-bucket", "ap-beijing", "id", "key",
+                     data_as_of="2026-11-06", run_id="run-abc123")
+    cap = _capture(up)
+    up.upload_market_regime({"label": "震荡"})
+    data = cap["data"]
+    assert data["run_id"] == "run-abc123"
+    assert data["data_as_of"] == "2026-11-06"
+    assert data["date"] == "2026-11-06"
+
+
+def test_run_id_is_stable_within_one_uploader():
+    up = CosUploader("dummy-bucket", "ap-beijing", "id", "key")
+    cap = _capture(up)
+    up.upload_market_regime({"label": "震荡"})
+    first = cap["data"]["run_id"]
+    up.upload_rating_config({"x": 1})
+    assert cap["data"]["run_id"] == first
+
+
+def test_manifest_lists_uploaded_files():
+    up = CosUploader("dummy-bucket", "ap-beijing", "id", "key", data_as_of="2026-11-06")
+    up._uploaded = ["summary/today.json", "ratings/today.json"]
+    cap = _capture(up)
+    assert up.upload_manifest()
+    assert cap["data"]["type"] == "manifest"
+    assert cap["data"]["files"] == ["ratings/today.json", "summary/today.json"]
+    assert cap["data"]["run_id"] == up.run_id

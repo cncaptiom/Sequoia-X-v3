@@ -74,6 +74,70 @@ def _check_data_freshness(engine, logger, phase: str = "") -> dict:
         logger.warning(f"超过30%股票数据过期，选股结果可能不准确！建议执行 --backfill 或检查网络")
     return report
 
+# ── 数据质量闸门（fail closed）──
+GATE_MIN_COVERAGE = 0.50      # 最新行情日的个股覆盖率下限
+GATE_MAX_STALE_DAYS = 5       # 最新行情日距今的最大自然日数
+GATE_INDEX_SYMBOL = "000905"  # 关键指数
+
+
+def _evaluate_data_gate(engine, logger, sync_count: int | None = None,
+                        ) -> tuple[bool, str, list[str]]:
+    """发布前的数据质量闸门。
+
+    返回 (ok, data_as_of, reasons)。ok=False 时调用方**必须停止发布**新推荐 ——
+    旧行为的失败模式是「同步写 0 条也只打个 warning，照常把旧行情包装成当日推荐」，
+    手机端看到的日期却是程序运行日（2026-11-09 审查 #7）。
+
+    判据：库里有数据 / 最新行情日覆盖率达标 / 关键指数当日有数据 /
+    交易日同步写 0 条时最新行情日不能超出容忍期。
+    """
+    import sqlite3
+
+    latest = None
+    total = covered = 0
+    has_index = False
+    try:
+        with sqlite3.connect(engine.db_path) as conn:
+            latest = conn.execute("SELECT MAX(date) FROM stock_daily").fetchone()[0]
+            if latest:
+                total = conn.execute(
+                    "SELECT COUNT(DISTINCT symbol) FROM stock_daily").fetchone()[0]
+                covered = conn.execute(
+                    "SELECT COUNT(DISTINCT symbol) FROM stock_daily WHERE date = ?",
+                    (latest,)).fetchone()[0]
+                has_index = conn.execute(
+                    "SELECT 1 FROM stock_daily WHERE symbol = ? AND date = ? LIMIT 1",
+                    (GATE_INDEX_SYMBOL, latest)).fetchone() is not None
+    except Exception as exc:
+        return False, "", [f"读取行情库失败: {exc}"]
+
+    if not latest:
+        return False, "", ["行情库为空"]
+
+    reasons: list[str] = []
+    if total and covered / total < GATE_MIN_COVERAGE:
+        reasons.append(
+            f"最新行情日 {latest} 覆盖率仅 {covered}/{total}"
+            f"（<{GATE_MIN_COVERAGE:.0%}）")
+    if not has_index:
+        reasons.append(f"关键指数 {GATE_INDEX_SYMBOL} 在 {latest} 无数据")
+    if sync_count == 0:
+        age = (date.today() - date.fromisoformat(str(latest))).days
+        if age > GATE_MAX_STALE_DAYS:
+            reasons.append(f"同步写入 0 条且最新行情日 {latest} 已过期 {age} 天")
+        else:
+            logger.warning(
+                f"同步写入 0 条，但最新行情 {latest} 仍在 {GATE_MAX_STALE_DAYS} 天容忍期内")
+
+    if reasons:
+        for r in reasons:
+            logger.error(f"数据质量闸门未通过: {r}")
+        return False, str(latest), reasons
+
+    logger.info(f"数据质量闸门通过: data_as_of={latest}, 覆盖 {covered}/{total}")
+    return True, str(latest), []
+
+
 def _upload_priority_watchlist(uploader, engine, regime_result=None):
     """上传优先监控列表（Serenity 产业链瓶颈标的）到 COS。"""
     import json, os
@@ -181,7 +245,8 @@ def _track_consecutive(top_picks: list[dict]):
         json.dump(tracker, f, ensure_ascii=False, indent=2)
 
 
-def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, regime_result=None):
+def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None,
+                   regime_result=None, data_as_of: str | None = None):
     if not settings.cos_enabled:
         logger.info("COS not enabled, skip")
         return False
@@ -194,7 +259,8 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
         return False
     ok = True
     from sequoia_x.cloud import CosUploader
-    uploader = CosUploader(bucket, region, secret_id, secret_key)
+    uploader = CosUploader(bucket, region, secret_id, secret_key,
+                           data_as_of=data_as_of)
 
     from sequoia_x.rating.engine import RatingConfig
     config = RatingConfig()
@@ -298,7 +364,15 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None, 
         except Exception as _exc:
             logger.warning(f"策略回测数据上传失败: {_exc}")
 
-    logger.info(f"COS sync {'OK' if ok else 'partial fail'}")
+    # 最后发布批次清单：手机端据此确认「这一批」完整，否则整体按旧数据处理。
+    # 任何文件上传失败时都不发布 manifest，避免混合批次（2026-11-09 审查 #8）。
+    if ok:
+        if not uploader.upload_manifest():
+            ok = False
+    else:
+        logger.warning("存在上传失败的文件，跳过 manifest 发布（手机端将继续使用上一批次）")
+
+    logger.info(f"COS sync {'OK' if ok else 'partial fail'} (run_id={uploader.run_id})")
     return ok
 
 
@@ -358,16 +432,29 @@ def _run_daily(settings, logger, engine, notifier) -> None:
 
     # ── A 阶段：同步数据 + 执行策略 ──
     logger.info("开始拉取最新快照...")
+    sync_count = None
     if not _is_trading_day():
         logger.info("今日非交易日，跳过数据同步")
     else:
-        count = engine.sync_today_bulk()
-        logger.info(f"快照同步完成，写入 {count} 条数据")
+        try:
+            sync_count = engine.sync_today_bulk()
+            logger.info(f"快照同步完成，写入 {sync_count} 条数据")
+        except Exception as exc:
+            sync_count = 0
+            logger.error(f"数据同步失败: {exc}")
+
+    gate_ok, data_as_of, gate_reasons = _evaluate_data_gate(engine, logger, sync_count)
+    if not gate_ok:
+        logger.error("数据质量闸门未通过，本轮不发布推荐: " + "; ".join(gate_reasons))
+        return
 
     # -- market regime detection --
     detector = RegimeDetector(engine)
-    regime = detector.detect("000905")
+    regime = detector.detect("000905", max_staleness_days=10)
     logger.info(f"Regime: {regime.label}, exposure: {regime.suggested_exposure:.0%}, trend: {regime.trend_strength:+.2f}")
+    if not regime.is_valid:
+        logger.error(f"市场状态不可用（{regime.details}），本轮不发布推荐")
+        return
 
     regime_warning = ""
     if regime.suggested_exposure <= 0.30:
@@ -527,7 +614,8 @@ def _run_daily(settings, logger, engine, notifier) -> None:
 
         if all_candidates:
             # 生成结构化交易信号
-            sig_gen = SignalGenerator(engine, total_capital=1_000_000.0)
+            sig_gen = SignalGenerator(engine, total_capital=1_000_000.0,
+                                      data_as_of=data_as_of)
             signals = sig_gen.batch_generate(
                 symbols=all_candidates,
                 strategy_map=strategy_map,
@@ -564,7 +652,7 @@ def _run_daily(settings, logger, engine, notifier) -> None:
             # 返回值必须看：`_upload_to_cos` 会返回 ok=False 表示部分失败（手机端可能
             # 拿不到今日数据），此前这个返回值被整个丢弃，失败是静默的。
             if not _upload_to_cos(settings, logger, engine, signals=top_signals,
-                                  regime_result=regime):
+                                  regime_result=regime, data_as_of=data_as_of):
                 raise CoreStepFailure("COS 同步未全部成功")
         else:
             logger.info("无候选股票，跳过信号生成")
@@ -637,11 +725,22 @@ def _run_rating(settings, logger, engine, notifier) -> None:
         return
 
     # 非交易日跳过数据同步
+    sync_count = None
     if not _is_trading_day():
         logger.info("今日非交易日，跳过数据同步")
     else:
-        count = engine.sync_today_bulk()
-        logger.info(f"数据同步完成，写入 {count} 条")
+        try:
+            sync_count = engine.sync_today_bulk()
+            logger.info(f"数据同步完成，写入 {sync_count} 条")
+        except Exception as exc:
+            sync_count = 0
+            logger.error(f"数据同步失败: {exc}")
+
+    # ── 数据质量闸门：不合格就停止发布，不能把旧行情包装成当日推荐 ──
+    gate_ok, data_as_of, gate_reasons = _evaluate_data_gate(engine, logger, sync_count)
+    if not gate_ok:
+        logger.error("数据质量闸门未通过，本轮不发布推荐: " + "; ".join(gate_reasons))
+        return
 
     # 批量查股票名称（使用 NameResolver 缓存替代重复 baostock 查询）
     from sequoia_x.utils.name_resolver import get_name_resolver
@@ -656,9 +755,12 @@ def _run_rating(settings, logger, engine, notifier) -> None:
 
     # 市场状态检测
     detector = RegimeDetector(engine)
-    regime = detector.detect("000905")
+    regime = detector.detect("000905", max_staleness_days=10)
     logger.info(f"Regime: {regime.label}, exposure: {regime.suggested_exposure:.0%}")
     notifier.send_regime_alert(regime, webhook_key="rating")
+    if not regime.is_valid:
+        logger.error(f"市场状态不可用（{regime.details}），本轮不发布推荐")
+        return
 
     # 创建评级引擎（根据市场状态动态调整策略权重）
     from sequoia_x.rating.engine import RatingConfig
@@ -776,7 +878,7 @@ def _run_rating(settings, logger, engine, notifier) -> None:
         from sequoia_x.recommender.reporter import ReportGenerator
         from sequoia_x.signal.models import SignalResult, TradeSignal
 
-        gen = SignalGenerator(engine)
+        gen = SignalGenerator(engine, data_as_of=data_as_of)
         signals = gen.batch_generate(
             symbols=[r.symbol for r in candidates],
             strategy_map=strategy_map,
@@ -921,7 +1023,8 @@ def _run_rating(settings, logger, engine, notifier) -> None:
         # 此前这个返回值被整个丢弃、异常也只打 warning → 静默成功（见 M10）。
         try:
             ok = _upload_to_cos(settings, logger, engine, rating_results=all_results,
-                                signals=signals if signals else None, regime_result=regime)
+                                signals=signals if signals else None, regime_result=regime,
+                                data_as_of=data_as_of)
         except Exception as exc:
             raise CoreStepFailure(f"COS 上传异常: {exc}") from exc
         if not ok:

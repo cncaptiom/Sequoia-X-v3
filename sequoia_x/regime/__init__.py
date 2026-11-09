@@ -35,6 +35,7 @@ class MarketRegime(Enum):
     RANGE = "range"                  # 震荡：均线缠绕，无明显方向
     WEAK_BEAR = "weak_bear"          # 弱熊：价格在 MA60 之下但非完美空头
     STRONG_BEAR = "strong_bear"      # 强熊：均线空头排列
+    UNKNOWN = "unknown"              # 数据不足/基准缺失：不是一种市场状态
 
 
 REGIME_LABELS = {
@@ -43,6 +44,7 @@ REGIME_LABELS = {
     MarketRegime.RANGE: "震荡",
     MarketRegime.WEAK_BEAR: "弱熊",
     MarketRegime.STRONG_BEAR: "强熊",
+    MarketRegime.UNKNOWN: "未知",
 }
 
 # 各状态下的建议仓位
@@ -52,6 +54,8 @@ REGIME_EXPOSURE = {
     MarketRegime.RANGE: 0.50,
     MarketRegime.WEAK_BEAR: 0.30,
     MarketRegime.STRONG_BEAR: 0.15,
+    # 指数数据缺失/过期时不能假装是"震荡 50%"，而是不新增风险敞口
+    MarketRegime.UNKNOWN: 0.00,
 }
 
 # 各市场状态下策略类别的权重偏向（2026-08 全量因子验证校准）
@@ -71,6 +75,8 @@ REGIME_BIAS = {
     "震荡": {"trend": 0.14, "momentum": 0.08, "reversal": 0.46, "fundamental": 0.32},
     "弱熊": {"trend": 0.06, "momentum": 0.04, "reversal": 0.58, "fundamental": 0.32},
     "强熊": {"trend": 0.00, "momentum": 0.00, "reversal": 0.68, "fundamental": 0.32},
+    # 数据不足时只用于"展示评分"，不应据此开新仓（exposure=0）
+    "未知": {"trend": 0.14, "momentum": 0.08, "reversal": 0.46, "fundamental": 0.32},
 }
 
 
@@ -86,6 +92,11 @@ class RegimeResult:
     volatility_pct: float                     # 当前波动率百分位
     details: str                              # 详细描述
 
+    @property
+    def is_valid(self) -> bool:
+        """市场状态是否可用。UNKNOWN 表示数据缺失，不能据此给出仓位。"""
+        return self.regime is not MarketRegime.UNKNOWN
+
 
 class RegimeDetector:
     """市场状态检测器。
@@ -96,41 +107,36 @@ class RegimeDetector:
     def __init__(self, data_engine):
         self.engine = data_engine
 
-    def detect(self, benchmark_symbol: str = "000905") -> RegimeResult:
+    def detect(self, benchmark_symbol: str = "000905",
+               max_staleness_days: int | None = None) -> RegimeResult:
         """检测当前市场状态。
 
         Args:
             benchmark_symbol: 基准指数 baostock 代码，默认沪深300。
+            max_staleness_days: 基准指数最后一个交易日距今天超过该天数时判为
+                UNKNOWN（数据过期）。None 表示不检查（历史回放场景）。
 
         Returns:
-            RegimeResult。
+            RegimeResult。数据缺失/不足/过期时 regime=UNKNOWN、exposure=0。
         """
         try:
             df = self.engine.get_ohlcv(benchmark_symbol)
-        except Exception:
-            logger.warning(f"无法获取基准 {benchmark_symbol} 数据，默认返回震荡市")
-            return RegimeResult(
-                regime=MarketRegime.RANGE,
-                label="震荡(默认)",
-                suggested_exposure=0.50,
-                strategy_bias=REGIME_BIAS["震荡"],
-                trend_strength=0.0,
-                volatility_regime="normal",
-                volatility_pct=0.5,
-                details="无法获取基准数据",
-            )
+        except Exception as exc:
+            logger.warning(f"无法获取基准 {benchmark_symbol} 数据: {exc}")
+            return self._unknown(f"无法获取基准数据: {exc}")
 
         if df.empty or len(df) < 60:
-            return RegimeResult(
-                regime=MarketRegime.RANGE,
-                label="震荡(数据不足)",
-                suggested_exposure=0.50,
-                strategy_bias=REGIME_BIAS["震荡"],
-                trend_strength=0.0,
-                volatility_regime="normal",
-                volatility_pct=0.5,
-                details="基准数据不足",
-            )
+            return self._unknown(f"基准数据不足（{len(df)} 条）")
+
+        if max_staleness_days is not None:
+            from datetime import date
+            try:
+                last = date.fromisoformat(str(df["date"].iloc[-1]))
+                age = (date.today() - last).days
+                if age > max_staleness_days:
+                    return self._unknown(f"基准数据过期 {age} 天（最新 {last}）")
+            except ValueError:
+                return self._unknown("基准数据日期格式异常")
 
         closes = df["close"]
 
@@ -215,6 +221,20 @@ class RegimeDetector:
             volatility_regime=vol_regime,
             volatility_pct=round(float(vol_percentile), 2),
             details=" | ".join(details_parts),
+        )
+
+    @staticmethod
+    def _unknown(detail: str) -> RegimeResult:
+        """数据不可用时的明确状态：不给出仓位建议。"""
+        return RegimeResult(
+            regime=MarketRegime.UNKNOWN,
+            label=REGIME_LABELS[MarketRegime.UNKNOWN],
+            suggested_exposure=0.0,
+            strategy_bias=REGIME_BIAS["未知"],
+            trend_strength=0.0,
+            volatility_regime="unknown",
+            volatility_pct=0.0,
+            details=detail,
         )
 
     @staticmethod

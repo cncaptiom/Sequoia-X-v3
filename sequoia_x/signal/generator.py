@@ -34,9 +34,13 @@ class SignalGenerator:
     生成带有买入区间、止损止盈、仓位建议的结构化 TradeSignal。
     """
 
-    def __init__(self, engine: DataEngine, total_capital: float = 1_000_000.0):
+    def __init__(self, engine: DataEngine, total_capital: float = 1_000_000.0,
+                 data_as_of: Optional[str] = None):
         self.engine = engine
         self.total_capital = total_capital
+        # 全市场最新行情日。提供时，行情落后的个股（停牌/数据缺失）不再出信号，
+        # 避免旧行情被当成当日推荐（2026-11-09 审查 #7）。
+        self.data_as_of = data_as_of
 
     def generate(
         self,
@@ -63,7 +67,12 @@ class SignalGenerator:
         current_price = float(last["close"])
         last_date = str(last["date"])
 
-        # 数据新鲜度：超过 7 个自然日不推荐
+        # 数据新鲜度：超过 7 个自然日不推荐；给了全市场行情日时，
+        # 落后于该日期的个股（停牌/缺数据）同样不推荐
+        if self.data_as_of and last_date < self.data_as_of:
+            logger.log(5, f"[{symbol}] 行情落后于全市场最新日 "
+                          f"({last_date} < {self.data_as_of})，跳过")
+            return None
         try:
             if (date.today() - date.fromisoformat(last_date)).days > 7:
                 logger.log(5, f"[{symbol}] 数据过期 ({last_date})，跳过")

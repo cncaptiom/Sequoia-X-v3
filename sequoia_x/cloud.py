@@ -10,6 +10,7 @@
 
 import json
 import time
+import uuid
 from typing import Any, Optional
 
 from qcloud_cos import CosConfig, CosS3Client
@@ -24,10 +25,16 @@ class CosUploader:
     """腾讯云 COS 上传器（封装官方 SDK）。"""
 
     def __init__(self, bucket: str, region: str, secret_id: str, secret_key: str,
-                 timeout: int = 120):
+                 timeout: int = 120, data_as_of: Optional[str] = None,
+                 run_id: Optional[str] = None):
         self.bucket = bucket
         self.region = region
         self.timeout = timeout
+        # 同一次 PC 运行的所有文件共用一个 run_id，手机端据此拒绝混合批次
+        self.run_id = run_id or uuid.uuid4().hex[:12]
+        # 行情数据的真实日期（YYYY-MM-DD）。为空时才回退到运行日期。
+        self.data_as_of = data_as_of
+        self._uploaded: list[str] = []
         config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key,
                            Timeout=timeout)
         self.client = CosS3Client(config)
@@ -46,6 +53,7 @@ class CosUploader:
                     Key=path,
                 )
                 logger.info(f"COS上传成功: {path} ({len(body)} bytes)")
+                self._uploaded.append(path)
                 return True
             except Exception as exc:
                 if attempt < retries - 1:
@@ -68,11 +76,32 @@ class CosUploader:
         return time.strftime("%Y-%m-%d %H:%M:%S")
 
     def _metadata(self) -> dict[str, Any]:
+        """所有文件共用的元数据。
+
+        `date` 是**行情数据日期**，不是程序运行日期——否则断网时同步 0 条、
+        程序照常运行，手机端会把旧行情当成当天数据（2026-11-09 审查 #7）。
+        """
+        data_date = self.data_as_of or self._today()
         return {
             "version": "3.1.0",
-            "date": self._today(),
+            "run_id": self.run_id,
+            "date": data_date,
+            "data_as_of": data_date,
             "generated_at": self._now(),
         }
+
+    def upload_manifest(self) -> bool:
+        """最后发布批次清单（原子发布点）。
+
+        手机端以 manifest.json 为“这一批数据是否完整”的唯一判据：
+        没有 manifest 或 run_id 与各文件不一致时，整体按旧数据/不完整处理。
+        """
+        data = {
+            **self._metadata(),
+            "type": "manifest",
+            "files": sorted(set(self._uploaded)),
+        }
+        return self._put_json("manifest.json", data)
 
     # ── 核心上传接口 ──
 
