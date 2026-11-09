@@ -45,6 +45,46 @@ def _winsorize(arr: np.ndarray, lo: float = 1.0, hi: float = 99.0) -> np.ndarray
     return np.clip(a, p[0], p[1])
 
 
+def _ic_stats(ics: np.ndarray, overlap: int) -> dict:
+    """IC 序列的均值/IR 及**自相关修正**后的显著性。
+
+    N 日前瞻收益是重叠的：相邻交易日的 IC 并非独立样本，普通 mean/std
+    会把标准误低估约 sqrt(overlap) 倍，导致 IR 与显著性虚高。
+    这里用 Newey-West（Bartlett 核，滞后 = overlap-1）估计长期方差。
+
+    返回的 `n_eff = n / overlap` 是独立样本数的粗略下界，用于判断显著性时
+    应同时看它——n_eff 很小时 t_nw 本身也不可靠。
+    """
+    x = np.asarray(ics, dtype=float)
+    x = x[~np.isnan(x)]
+    n = len(x)
+    if n < 3:
+        return {"mean_ic": None, "ir": None, "ir_nw": None, "t_naive": None,
+                "t_nw": None, "n_days": n, "n_eff": 0}
+
+    mean = float(x.mean())
+    std = float(x.std(ddof=1))
+    lags = max(0, int(overlap) - 1)
+    centered = x - mean
+    var_nw = float((centered ** 2).sum() / n)
+    for k in range(1, lags + 1):
+        gamma = float((centered[k:] * centered[:-k]).sum() / n)
+        var_nw += 2.0 * (1.0 - k / (lags + 1)) * gamma
+    var_nw = max(var_nw, 0.0)
+
+    se_naive = std / np.sqrt(n) if std > 0 else np.nan
+    se_nw = np.sqrt(var_nw / n) if var_nw > 0 else np.nan
+    return {
+        "mean_ic": round(mean, 4),
+        "ir": round(mean / std, 2) if std > 0 else 0,
+        "ir_nw": round(mean / np.sqrt(var_nw), 2) if var_nw > 0 else None,
+        "t_naive": round(mean / se_naive, 2) if se_naive and not np.isnan(se_naive) else None,
+        "t_nw": round(mean / se_nw, 2) if se_nw and not np.isnan(se_nw) else None,
+        "n_days": n,
+        "n_eff": int(n / max(1, overlap)),
+    }
+
+
 def load_kline() -> dict[str, pd.DataFrame]:
     """加载全市场日线，按 symbol 分组。返回 {symbol: DataFrame}。"""
     t0 = time.time()
@@ -239,13 +279,9 @@ def main():
                 by_regime[rg].append(ic)
             row = {}
             for rg, ics in by_regime.items():
-                ics = np.array(ics)
-                row[rg] = {
-                    "mean_ic": round(float(np.nanmean(ics)), 4),
-                    "ir": round(float(np.nanmean(ics) / np.nanstd(ics)), 2) if np.nanstd(ics) > 0 else 0,
-                    "pos_pct": round(100 * float(np.mean(ics > 0)), 1),
-                    "n_days": int(len(ics)),
-                }
+                stats = _ic_stats(np.array(ics), overlap=n)
+                stats["pos_pct"] = round(100 * float(np.mean(np.array(ics) > 0)), 1)
+                row[rg] = stats
             ic_summary[f][str(n)] = row
 
     # ══════════════════════════
@@ -308,7 +344,7 @@ def main():
         r = ic_summary[f].get("20", {})
         all_ics = []
         for rg in ("bull", "range", "bear"):
-            if rg in r:
+            if rg in r and r[rg].get("mean_ic") is not None:
                 all_ics.append(r[rg]["mean_ic"])
         if all_ics:
             rank.append({"factor": f, "mean_ic_20d": round(float(np.mean(all_ics)), 4)})
@@ -329,14 +365,17 @@ def main():
     print(f"\n已完成 → output/factor_validation.json")
 
     # 终端摘要
-    print("\n===== 因子 20日IC 排名（分市场状态）=====")
+    print("\n===== 因子 20日IC 排名（分市场状态；t_nw 为重叠窗口自相关修正后 t 值）=====")
     for item in rank:
         f = item["factor"]
         r20 = ic_summary[f].get("20", {})
         parts = []
         for rg in ("bull", "range", "bear"):
             if rg in r20:
-                parts.append(f"{rg}:{r20[rg]['mean_ic']:+.3f}")
+                stats = r20[rg]
+                t_nw = stats.get("t_nw")
+                t_txt = "n/a" if t_nw is None else f"{t_nw:+.2f}"
+                parts.append(f"{rg}:{stats['mean_ic']:+.3f}(t_nw={t_txt},n_eff={stats['n_eff']})")
         print(f"  {f:14s} IC20={'None' if item['mean_ic_20d'] is None else f'{item['mean_ic_20d']:+.4f}'}  {'  '.join(parts)}")
     print("\n===== 信号触发后 20日 收益（超额 vs 全市场）=====")
     for s in sig_cols:

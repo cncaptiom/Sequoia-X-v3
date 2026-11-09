@@ -194,6 +194,29 @@ class ICTracker:
             self._pending.pop(d_str, None)
             self._eval_record.pop(d_str, None)
 
+    @staticmethod
+    def _market_trade_dates(engine, start: str) -> list[str]:
+        """全市场交易日历：库内 DISTINCT date。
+
+        不能用某只股票自己的 K 线序列——那只股票停牌的日子会被误判成
+        非交易日，进而把正常交易日的快照当垃圾清掉（2026-11-09 审查 #6）。
+        """
+        import sqlite3
+        from contextlib import closing
+
+        db_path = getattr(engine, "db_path", None)
+        if not db_path:
+            return []
+        try:
+            with closing(sqlite3.connect(db_path)) as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT date FROM stock_daily WHERE date >= ? ORDER BY date",
+                    (start,),
+                ).fetchall()
+            return [r[0] for r in rows]
+        except sqlite3.Error:
+            return []
+
     def eval_forward_returns(self, engine,
                              lookforward_days: int = 5,
                              batch_size: int = 200):
@@ -245,13 +268,7 @@ class ICTracker:
             if not symbols:
                 continue
 
-            # 用第一个有数据的股票构建交易日历
-            trade_dates: list[str] = []
-            for sym in symbols[:10]:
-                df = engine.get_ohlcv(sym)
-                if df is not None and not df.empty:
-                    trade_dates = sorted(df[df["date"] >= d_str]["date"].tolist())
-                    break
+            trade_dates = self._market_trade_dates(engine, d_str)
             if not trade_dates:
                 continue
 

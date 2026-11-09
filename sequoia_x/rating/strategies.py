@@ -113,15 +113,21 @@ def turtle_trade_strategy(
     new_high_period: int = 60,
     volume_threshold: float = 1.5,
 ) -> StrategyResult:
-    """突破 + 趋势强度。"""
+    """突破 + 趋势强度。
+
+    突破定义 = 「今日收盘价 vs **前 N 个交易日**的最高价/最低价」。
+    窗口必须 shift(1) 排除当日——否则 `close >= 含当日 high 的最大值` 只有
+    close == high 时才成立，真实的突破会被漏掉（2026-11-09 审查 #5）。
+    """
     result = StrategyResult()
-    if len(df) < max(break_period, new_high_period):
+    if len(df) < max(break_period, new_high_period) + 1:
         return result
 
     last = df.iloc[-1]
-    recent_high = df["high"].tail(break_period).max()
-    recent_low = df["low"].tail(break_period).min()
-    high_60 = df["high"].tail(new_high_period).max()
+    prior = df.iloc[:-1]                       # 不含当日的完整历史
+    recent_high = prior["high"].tail(break_period).max()
+    recent_low = prior["low"].tail(break_period).min()
+    high_60 = prior["high"].tail(new_high_period).max()
     avg_vol = df["volume"].tail(break_period).mean()
     vol_ratio = last["volume"] / avg_vol if avg_vol > 0 else 1.0
 
@@ -290,9 +296,10 @@ def atr_channel_strategy(
     is_bullish = trend_score >= 1.0 and ema_slope > 0
     is_bearish = trend_score <= -1.0 and ema_slope < 0
 
-    # 通道上下轨
-    upper_channel = high.tail(channel_window).max()
-    lower_channel = low.tail(channel_window).min()
+    # 通道上下轨用**前 N 日**高低点（不含当日），否则 close >= 含当日 high 的
+    # 最大值只有 close == high 才成立，突破会被漏判（2026-11-09 审查 #5）
+    upper_channel = high.shift(1).tail(channel_window).max()
+    lower_channel = low.shift(1).tail(channel_window).min()
     broke_upper = last_close >= upper_channel
     broke_lower = last_close <= lower_channel
 

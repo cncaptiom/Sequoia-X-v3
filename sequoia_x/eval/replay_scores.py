@@ -67,10 +67,12 @@ def compute_tech_series(df: pd.DataFrame) -> pd.DataFrame:
     ma60 = close.rolling(60).mean()
     std20 = close.rolling(20).std()
 
-    # turtle / atr / ma_cross 共用窗口极值
-    roll_h20 = high.rolling(20, min_periods=1).max()
-    roll_l20 = low.rolling(20, min_periods=1).min()
-    roll_h60 = high.rolling(60, min_periods=1).max()
+    # turtle / atr / ma_cross 共用窗口极值。
+    # 必须 shift(1) 排除当日：生产侧 turtle_trade_strategy / atr_channel_strategy
+    # 也已改为「前 N 个交易日」口径，两边要逐点一致（2026-11-09 审查 #5）。
+    roll_h20 = high.shift(1).rolling(20, min_periods=1).max()
+    roll_l20 = low.shift(1).rolling(20, min_periods=1).min()
+    roll_h60 = high.shift(1).rolling(60, min_periods=1).max()
     avg_vol20 = vol.rolling(20, min_periods=1).mean()
 
     # mean_reversion
