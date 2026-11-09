@@ -177,6 +177,12 @@ class BacktestEngine:
 
         trades: list[Trade] = []
         positions: dict[str, dict] = {}
+        # 待成交订单（next_open 模式）：T 日收盘只生成订单，T+1 开盘才扣款建仓。
+        # 旧实现在 T 日循环里就直接扣款建仓、再用 T 日收盘估值，等于把还没发生的
+        # T+1 成交提前计入 T 日权益（见审查 #3）。
+        pending_buys: dict[str, int] = {}     # symbol -> 已顺延的交易日数
+        pending_sells: dict[str, dict] = {}   # symbol -> {"reason": str, "waited": int}
+        MAX_PENDING_DAYS = 3                  # 停牌/一字板最多顺延 3 个交易日后放弃
 
         # ---- 获取交易日历 ----
         all_dates = self._get_trading_dates(symbols[0], start_date, end_date)
@@ -217,20 +223,73 @@ class BacktestEngine:
 
         for i in range(cfg.min_bars, len(all_dates)):
             current_date = all_dates[i]
+            is_next_open = cfg.fill_mode == "next_open"
 
-            # -- 1. 运行选股策略（reference_date 由策略基类 get_data() 自动切片） --
+            # -- 0. next_open：执行上一交易日收盘生成的待成交订单 --
+            if is_next_open:
+                for sym in list(pending_sells.keys()):
+                    order = pending_sells[sym]
+                    pos = positions.get(sym)
+                    df_sym = all_data.get(sym)
+                    bar = self._bar_on(df_sym, current_date)
+                    if pos is None:
+                        pending_sells.pop(sym, None)
+                        continue
+                    if bar is None:
+                        order["waited"] += 1
+                        if order["waited"] > MAX_PENDING_DAYS:
+                            pending_sells.pop(sym, None)
+                        continue
+                    _, limit_down = self._limit_prices(df_sym, current_date, sym)
+                    open_px = float(bar["open"])
+                    # 开盘一字跌停卖不出，顺延
+                    if limit_down is not None and open_px <= limit_down + 0.001:
+                        order["waited"] += 1
+                        if order["waited"] > MAX_PENDING_DAYS:
+                            pending_sells.pop(sym, None)
+                        continue
+                    pending_sells.pop(sym, None)
+                    capital = self._book_exit(
+                        sym, positions, open_px, current_date, capital, order["reason"],
+                        i - pos["entry_idx"], cfg, trades)
+
+                for sym in list(pending_buys.keys()):
+                    waited = pending_buys.pop(sym)
+                    if sym in positions or len(positions) >= cfg.max_positions:
+                        continue
+                    df_sym = all_data.get(sym)
+                    bar = self._bar_on(df_sym, current_date)
+                    if bar is None:
+                        # 该股当日无行情（停牌）：继续等待，超时则放弃
+                        if waited + 1 <= MAX_PENDING_DAYS:
+                            pending_buys[sym] = waited + 1
+                        continue
+                    limit_up, _ = self._limit_prices(df_sym, current_date, sym)
+                    open_px = float(bar["open"])
+                    # 开盘一字涨停买不进，放弃本次订单
+                    if limit_up is not None and open_px >= limit_up - 0.001:
+                        continue
+                    equity_now = capital + self._market_value(
+                        positions, all_data, current_date, inclusive=False)
+                    new_capital = self._book_entry(
+                        sym, open_px, capital, equity_now, current_date,
+                        date_idx, i, cfg, positions)
+                    if new_capital is not None:
+                        capital = new_capital
+
+            # -- 1. 运行选股策略（失败只阻止新增订单，不影响下面的持仓风控） --
+            selected: list[str] = []
             try:
                 # 设置参考日期（替代 date.today() 的新鲜度检查）
                 if hasattr(strategy, 'reference_date'):
                     strategy.reference_date = current_date
                 selected = strategy.run()
+                if not isinstance(selected, list):
+                    selected = []
             except Exception as exc:
-                logger.warning(f"[{current_date}] 策略运行失败: {exc}")
-                continue
-            if not isinstance(selected, list):
-                selected = []
+                logger.warning(f"[{current_date}] 策略运行失败，跳过新增订单: {exc}")
 
-            # -- 3. 检查现有持仓的退出条件 --
+            # -- 2. 检查现有持仓的退出条件（每个交易日都必须执行） --
             for sym in list(positions.keys()):
                 pos = positions[sym]
                 try:
@@ -263,93 +322,54 @@ class BacktestEngine:
                     elif hold_days >= cfg.max_hold_days:
                         exit_reason = "time_exit"
 
-                    # A股执行约束：成交价一字跌停则卖不出，持仓顺延到下一交易日
                     if exit_reason:
                         if trigger_px is not None:
-                            exit_date, fill_price = current_date, trigger_px
+                            # A股执行约束：成交价一字跌停则卖不出，持仓顺延到下一交易日
+                            _, limit_down = self._limit_prices(df_sym, current_date, sym)
+                            if limit_down is not None and trigger_px <= limit_down + 0.001:
+                                continue
+                            capital = self._book_exit(
+                                sym, positions, trigger_px, current_date, capital,
+                                exit_reason, hold_days, cfg, trades)
+                        elif is_next_open:
+                            # 到期退出不是条件单：按 next_open 口径排到 T+1 开盘成交
+                            if sym not in pending_sells:
+                                pending_sells[sym] = {"reason": exit_reason, "waited": 0}
                         else:
-                            # 时间到期不是条件单，与开仓同口径按 fill_mode 决定成交时点
-                            fill = self._fill(df_sym, current_date)
-                            if fill is None:
-                                continue
-                            exit_date, fill_price = fill
-                        prev_rows = df_sym[df_sym["date"] < exit_date]
-                        if not prev_rows.empty:
-                            prev_close = float(prev_rows["close"].iloc[-1])
-                            limit_down = round(prev_close * (1 - self._limit_pct(sym)), 2)
-                            if fill_price <= limit_down + 0.001:
-                                continue
-                        exit_price = fill_price * (1 - cfg.slippage)
-                        # 平仓：收回本金+盈亏（扣卖出佣金与印花税），与开仓时扣除的成本对应
-                        entry_cost = pos["entry_price"] * pos["quantity"] * (1 + cfg.commission)
-                        proceeds = exit_price * pos["quantity"]
-                        exit_commission = proceeds * cfg.commission
-                        exit_tax = proceeds * cfg.stamp_tax
-                        pnl = proceeds - exit_commission - exit_tax - entry_cost
-                        trades.append(Trade(
-                            symbol=sym,
-                            entry_date=pos["entry_date"],
-                            exit_date=exit_date,
-                            entry_price=pos["entry_price"],
-                            exit_price=exit_price,
-                            quantity=pos["quantity"],
-                            pnl=round(pnl, 2),
-                            pnl_pct=round((pnl / entry_cost) * 100, 2) if entry_cost > 0 else 0.0,
-                            exit_reason=exit_reason,
-                            hold_days=hold_days,
-                        ))
-                        capital += proceeds - exit_commission - exit_tax
-                        del positions[sym]
-                except Exception:
+                            capital = self._book_exit(
+                                sym, positions, float(bar["close"]), current_date, capital,
+                                exit_reason, hold_days, cfg, trades)
+                except Exception as exc:
+                    logger.warning(f"[{current_date}] {sym} 持仓处理失败: {exc}")
                     continue
 
-            # -- 4. 开新仓 --
-            available_slots = cfg.max_positions - len(positions)
-            for sym in selected[:available_slots]:
-                if sym in positions:
+            # -- 3. 生成新订单（成交前不计入持仓/权益） --
+            available_slots = cfg.max_positions - len(positions) - len(pending_buys)
+            for sym in selected:
+                if available_slots <= 0:
+                    break
+                if sym in positions or sym in pending_buys:
                     continue
-                try:
-                    if sym not in all_data:
-                        continue
-                    df_sym = all_data[sym]
-                    fill = self._fill(df_sym, current_date)
-                    if fill is None:
-                        continue
-                    fill_date, fill_price = fill
-                    # A股执行约束：成交价一字涨停则买不进
-                    prev_rows = df_sym[df_sym["date"] < fill_date]
-                    if not prev_rows.empty:
-                        prev_close = float(prev_rows["close"].iloc[-1])
-                        limit_up = round(prev_close * (1 + self._limit_pct(sym)), 2)
-                        if fill_price >= limit_up - 0.001:
-                            continue
-                    entry_price = fill_price * (1 + cfg.slippage)
-                    position_value = capital * cfg.position_size_pct
-                    quantity = max(int(position_value / entry_price / 100) * 100, 100)
-                    cost = entry_price * quantity * (1 + cfg.commission)
-                    if cost > 0 and cost <= capital:  # 现金足够才开仓，并即时扣除成本
-                        capital -= cost
-                        positions[sym] = {
-                            "entry_date": fill_date,
-                            "entry_idx": date_idx.get(fill_date, i + 1),
-                            "entry_price": entry_price,
-                            "quantity": quantity,
-                        }
-                except Exception:
+                if sym not in all_data:
                     continue
+                if is_next_open:
+                    pending_buys[sym] = 0
+                    available_slots -= 1
+                    continue
+                bar = self._bar_on(all_data[sym], current_date)
+                if bar is None:
+                    continue
+                equity_now = capital + self._market_value(
+                    positions, all_data, current_date, inclusive=False)
+                new_capital = self._book_entry(
+                    sym, float(bar["close"]), capital, equity_now, current_date,
+                    date_idx, i, cfg, positions)
+                if new_capital is not None:
+                    capital = new_capital
+                    available_slots -= 1
 
-            # -- 5. 记录权益 --
-            market_value = 0.0
-            for sym, pos in list(positions.items()):
-                try:
-                    if sym in all_data:
-                        df_sym = all_data[sym]
-                        df_cut = df_sym[df_sym["date"] <= current_date]
-                        if not df_cut.empty:
-                            curr_price = float(df_cut["close"].iloc[-1])
-                            market_value += curr_price * pos["quantity"]
-                except Exception:
-                    pass
+            # -- 4. 记录权益（只含已成交持仓） --
+            market_value = self._market_value(positions, all_data, current_date)
             total_equity = capital + market_value
             equity_records.append({"date": current_date, "equity": round(total_equity, 2)})
 
@@ -389,25 +409,96 @@ class BacktestEngine:
         )
         return result
 
-    def _fill(self, df_sym: pd.DataFrame,
-              current_date: str) -> tuple[str, float] | None:
-        """按 `fill_mode` 给出成交日与成交价。
+    # ── 成交与记账辅助 ──
 
-        same_close：当日收盘价（历史实现）。信号本身就是拿当日收盘算出来的，
-        当天以同一收盘价成交是前视——见 H3。
-        next_open：下一交易日开盘价。
+    @staticmethod
+    def _bar_on(df_sym: pd.DataFrame | None, d: str):
+        """取某只股票在 d 日的 K 线；停牌/无数据返回 None。"""
+        if df_sym is None:
+            return None
+        rows = df_sym[df_sym["date"] == d]
+        return None if rows.empty else rows.iloc[0]
 
-        返回 None 表示没有可成交的 bar（该股此时还没有数据，或已到区间末尾）。
+    @staticmethod
+    def _market_value(positions: dict, all_data: dict, current_date: str,
+                      inclusive: bool = True) -> float:
+        """持仓市值。
+
+        inclusive=False 时只用 current_date **之前**的收盘价——给当日开盘成交
+        定价时，不能用当天收盘价估值（那是当天还不知道的信息）。
         """
-        df_cut = df_sym[df_sym["date"] <= current_date]
-        if df_cut.empty:
+        mv = 0.0
+        for sym, pos in positions.items():
+            df_sym = all_data.get(sym)
+            if df_sym is None:
+                continue
+            if inclusive:
+                df_cut = df_sym[df_sym["date"] <= current_date]
+            else:
+                df_cut = df_sym[df_sym["date"] < current_date]
+            if not df_cut.empty:
+                mv += float(df_cut["close"].iloc[-1]) * pos["quantity"]
+        return mv
+
+    def _limit_prices(self, df_sym: pd.DataFrame, d: str,
+                      symbol: str) -> tuple[float | None, float | None]:
+        """d 日的涨停价/跌停价（按前一交易日收盘价 × 板块涨跌幅）。"""
+        prev = df_sym[df_sym["date"] < d]
+        if prev.empty:
+            return None, None
+        prev_close = float(prev["close"].iloc[-1])
+        pct = self._limit_pct(symbol)
+        return round(prev_close * (1 + pct), 2), round(prev_close * (1 - pct), 2)
+
+    def _book_entry(self, sym: str, fill_price: float, capital: float, equity: float,
+                    fill_date: str, date_idx: dict, i: int, cfg: BacktestConfig,
+                    positions: dict) -> float | None:
+        """按单票预算建仓并扣减现金；预算不足一手时跳过（不强行买 100 股）。
+
+        返回新现金余额；跳过则返回 None。
+        """
+        entry_price = fill_price * (1 + cfg.slippage)
+        if entry_price <= 0:
             return None
-        if self.config.fill_mode != "next_open":
-            return current_date, float(df_cut["close"].iloc[-1])
-        df_next = df_sym[df_sym["date"] > current_date]
-        if df_next.empty:
+        budget = min(equity * cfg.position_size_pct, capital)
+        quantity = int(budget / entry_price / 100) * 100
+        if quantity < 100:
             return None
-        return str(df_next["date"].iloc[0]), float(df_next["open"].iloc[0])
+        cost = entry_price * quantity * (1 + cfg.commission)
+        if cost > capital:
+            return None
+        positions[sym] = {
+            "entry_date": fill_date,
+            "entry_idx": date_idx.get(fill_date, i),
+            "entry_price": entry_price,
+            "quantity": quantity,
+        }
+        return capital - cost
+
+    def _book_exit(self, sym: str, positions: dict, fill_price: float,
+                   exit_date: str, capital: float, reason: str, hold_days: int,
+                   cfg: BacktestConfig, trades: list[Trade]) -> float:
+        """平仓并记账，返回新现金余额（成交净额已加回）。"""
+        pos = positions.pop(sym)
+        exit_price = fill_price * (1 - cfg.slippage)
+        entry_cost = pos["entry_price"] * pos["quantity"] * (1 + cfg.commission)
+        proceeds = exit_price * pos["quantity"]
+        exit_commission = proceeds * cfg.commission
+        exit_tax = proceeds * cfg.stamp_tax
+        pnl = proceeds - exit_commission - exit_tax - entry_cost
+        trades.append(Trade(
+            symbol=sym,
+            entry_date=pos["entry_date"],
+            exit_date=exit_date,
+            entry_price=pos["entry_price"],
+            exit_price=exit_price,
+            quantity=pos["quantity"],
+            pnl=round(pnl, 2),
+            pnl_pct=round((pnl / entry_cost) * 100, 2) if entry_cost > 0 else 0.0,
+            exit_reason=reason,
+            hold_days=hold_days,
+        ))
+        return capital + proceeds - exit_commission - exit_tax
 
     @staticmethod
     def _limit_pct(symbol: str) -> float:

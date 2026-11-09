@@ -1199,13 +1199,20 @@ class DataEngine:
         logger.debug(f"批量加载 {len(symbols) if symbols else 'all'} 只 -> {len(result)} 有数据 (范围: {start_date}~{end_date})")
         return result
 
-    def preload_all(self, symbols: list[str]) -> None:
+    def preload_all(self, symbols: list[str],
+                    start_date: str | None = None,
+                    end_date: str | None = None) -> None:
         """一次性批量加载全市场数据到内存缓存。
 
         回测场景下，调用此方法后所有 get_ohlcv() 查询将命中内存缓存，
         避免逐只 SQL 查询。5200 只股票约 3 秒完成。
+
+        start_date/end_date 用于只加载回测窗口（含前置回看），否则加载全部历史。
         """
-        self._cache = self.get_bulk_ohlcv(symbols)
+        if start_date or end_date:
+            self._cache = self.get_bulk_ohlcv_date_range(symbols, start_date, end_date)
+        else:
+            self._cache = self.get_bulk_ohlcv(symbols)
         logger.info(f"预加载完成: {len(self._cache)} 只股票已缓存")
 
     def get_sliced_ohlcv(self, symbol: str, cutoff_date: str) -> "pd.DataFrame":

@@ -42,3 +42,31 @@ def test_strategy_run_returns_list_of_str(symbols: list[str]) -> None:
 
     assert isinstance(result, list)
     assert all(isinstance(s, str) and len(s) > 0 for s in result)
+
+
+def test_get_data_truncates_when_cache_miss() -> None:
+    """回测模式下，缓存未命中的股票也必须按 reference_date 截断。
+
+    此前只有缓存分支截断，未预加载的股票走 get_ohlcv() 会拿到回测日之后的
+    数据，形成未来函数（2026-11-09 审查 #1）。
+    """
+    from sequoia_x.strategy.base import BaseStrategy
+
+    full = pd.DataFrame({
+        "date": ["2026-01-05", "2026-01-06", "2026-01-07"],
+        "close": [10.0, 11.0, 12.0],
+    })
+
+    class _Engine:
+        def get_ohlcv(self, symbol):
+            return full.copy()
+
+    class _Strategy(BaseStrategy):
+        def run(self):
+            return []
+
+    strategy = _Strategy(_Engine(), None)
+    strategy.reference_date = "2026-01-06"
+
+    df = strategy.get_data("sh.600000")
+    assert list(df["date"]) == ["2026-01-05", "2026-01-06"]

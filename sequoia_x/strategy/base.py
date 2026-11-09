@@ -52,14 +52,17 @@ class BaseStrategy(ABC):
         """获取股票数据：优先预加载缓存，回退到引擎。
 
         回测模式下（设置了 reference_date），自动将数据切片到该日期，
-        防止未来信息泄漏。
+        防止未来信息泄漏。**两条取数路径都要截断**：缓存未命中的股票走
+        engine.get_ohlcv() 返回的是完整历史，只截断缓存分支会让未预加载的
+        股票直接读到回测日之后的数据（见审查 #1）。
         """
         if self._preloaded and symbol in self._preloaded:
             df = self._preloaded[symbol]
-            if self.reference_date is not None:
-                df = df[df["date"] <= self.reference_date]
-            return df
-        return self.engine.get_ohlcv(symbol)
+        else:
+            df = self.engine.get_ohlcv(symbol)
+        if self.reference_date is not None and not df.empty:
+            df = df[df["date"] <= self.reference_date]
+        return df
 
     @abstractmethod
     def run(self) -> list[str]:
