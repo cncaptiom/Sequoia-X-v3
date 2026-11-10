@@ -175,6 +175,63 @@ def _gate_snapshot_date() -> str | None:
     return None
 
 
+def build_score_matrix(syms: list[str], score_dates: set[str]) -> pd.DataFrame:
+    """构建逐日截面评分长表。
+
+    返回列：date / symbol / trend / 各策略原始分 / fwd{5,10,20}。
+    评分口径完全来自 `compute_tech_series`（与生产 strategies 逐点一致），
+    权重不在这里耦合——这样权重校准可以复用同一份评分矩阵，不必重复跑评分。
+    """
+    rows: list[dict] = []
+    t0 = time.time()
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    for idx, sym in enumerate(syms):
+        df = load_symbol_df(conn, sym)
+        if df.empty or len(df) < 60:
+            continue
+        tech = compute_tech_series(df)
+        close = df["close"]
+        in_eval = df["date"].isin(score_dates).values
+        valid = (tech["bar_idx"].values >= 59) & (~tech["gap_excl"].values)
+        keep = in_eval & valid
+        if not keep.any():
+            continue
+        t = tech.loc[keep]
+        dts = df.loc[keep, "date"].tolist()
+        rec = {
+            "date": dts,
+            "symbol": [sym] * len(dts),
+            "trend": t["trend_ok"].astype(int).tolist(),
+        }
+        for k in MEMBER_KEYS:
+            rec[k] = t[f"score_{k}"].astype(float).tolist()
+        c = close.values
+        for n in FWD:
+            fwd = pd.Series(c).shift(-n) / c - 1.0
+            rec[f"fwd{n}"] = fwd.iloc[keep].values.tolist()
+        rows.append(rec)
+        if (idx + 1) % 800 == 0:
+            print(f"  评分 {idx+1}/{len(syms)} 耗时 {time.time()-t0:.0f}s", flush=True)
+    conn.close()
+
+    flat = []
+    for grp in rows:
+        n = len(grp["date"])
+        for i in range(n):
+            row = {"date": grp["date"][i], "symbol": grp["symbol"][i],
+                   "trend": grp["trend"][i]}
+            for k in MEMBER_KEYS:
+                row[k] = grp[k][i]
+            for nd in FWD:
+                row[f"fwd{nd}"] = grp[f"fwd{nd}"][i]
+            flat.append(row)
+    big = pd.DataFrame(flat)
+    del rows, flat
+    big = big.sort_values("date").reset_index(drop=True)
+    print(f"评分行 {len(big)}（日期 {big['date'].nunique()}）构建耗时 {time.time()-t0:.0f}s", flush=True)
+    return big
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2024-07-01")
@@ -208,53 +265,7 @@ def main():
     # 预计算每日 regime 权重
     daily_w: dict[str, dict[str, float]] = {d: reg_weights[reg[d]] for d in eval_dates}
 
-    rows: list[dict] = []
-    t0 = time.time()
-    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-    for idx, sym in enumerate(syms):
-        df = load_symbol_df(conn, sym)
-        if df.empty or len(df) < 60:
-            continue
-        tech = compute_tech_series(df)
-        close = df["close"]
-        in_eval = df["date"].isin(score_dates).values
-        valid = (tech["bar_idx"].values >= 59) & (~tech["gap_excl"].values)
-        keep = in_eval & valid
-        if not keep.any():
-            continue
-        t = tech.loc[keep]
-        dts = df.loc[keep, "date"].tolist()
-        rec = {
-            "date": dts,
-            "symbol": [sym] * len(dts),
-            "trend": t["trend_ok"].astype(int).tolist(),
-        }
-        for k in MEMBER_KEYS:
-            rec[k] = t[f"score_{k}"].astype(float).tolist()
-        c = close.values
-        for n in FWD:
-            fwd = pd.Series(c).shift(-n) / c - 1.0
-            rec[f"fwd{n}"] = fwd.iloc[keep].values.tolist()
-        rows.append(rec)
-        if (idx + 1) % 800 == 0:
-            print(f"  评分 {idx+1}/{len(syms)} 耗时 {time.time()-t0:.0f}s", flush=True)
-    conn.close()
-    # 摊平为行
-    flat = []
-    for grp in rows:
-        n = len(grp["date"])
-        for i in range(n):
-            row = {"date": grp["date"][i], "symbol": grp["symbol"][i],
-                   "trend": grp["trend"][i]}
-            for k in MEMBER_KEYS:
-                row[k] = grp[k][i]
-            for nd in FWD:
-                row[f"fwd{nd}"] = grp[f"fwd{nd}"][i]
-            flat.append(row)
-    big = pd.DataFrame(flat)
-    del rows, flat
-    big = big.sort_values("date").reset_index(drop=True)
-    print(f"评分行 {len(big)}（日期 {big['date'].nunique()}）构建耗时 {time.time()-t0:.0f}s", flush=True)
+    big = build_score_matrix(syms, score_dates)
 
     # 逐日截面 → 合成分/评级 → 组内排序取 Top
     days_out = []

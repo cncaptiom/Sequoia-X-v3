@@ -69,14 +69,25 @@ REGIME_EXPOSURE = {
 #   · 趋势突破 熊市超额-3.24%（假突破多）→ 熊市 trend 权重极低
 #   · 动量类 横截面 IC 全程为负 → momentum 权重最低
 #   · fundamental 独立防御维度，熊市保持稳定权重
+#
+# 2026-11-10 重校准：trend 类权重 ×0.554。
+#   原因不是回测寻优，而是修复带来的**有效暴露变化**：海龟突破的窗口此前包含
+#   当日 high（`close >= max(含当日 high)` 只有 close==high 才成立），生产里
+#   turtleTrade 全市场恒为 0 分，trend 类实际只有 atrChannel 在工作，类别分
+#   方差仅 (0+z_atr)/2。2026-11-09 修好窗口后两策略同时生效，实测类别分
+#   标准差 0.5 → 0.902（1.80×，两策略横截面相关 0.63）。
+#   0.554 = 0.5/0.902，把 trend 的有效暴露恢复到本表当初被校准时的水平；
+#   momentum/reversal 按原比例吸收剩余预算，非财务总预算 0.68 不变。
+#   单参数扫描（run_trend_calib.py）的样本内外结果不足以支持任何更大幅度的
+#   调整，故不外推。
 REGIME_BIAS = {
-    "强牛": {"trend": 0.22, "momentum": 0.12, "reversal": 0.34, "fundamental": 0.32},
-    "弱牛": {"trend": 0.16, "momentum": 0.12, "reversal": 0.40, "fundamental": 0.32},
-    "震荡": {"trend": 0.14, "momentum": 0.08, "reversal": 0.46, "fundamental": 0.32},
-    "弱熊": {"trend": 0.06, "momentum": 0.04, "reversal": 0.58, "fundamental": 0.32},
-    "强熊": {"trend": 0.00, "momentum": 0.00, "reversal": 0.68, "fundamental": 0.32},
+    "强牛": {"trend": 0.122, "momentum": 0.146, "reversal": 0.412, "fundamental": 0.32},
+    "弱牛": {"trend": 0.089, "momentum": 0.136, "reversal": 0.455, "fundamental": 0.32},
+    "震荡": {"trend": 0.078, "momentum": 0.089, "reversal": 0.513, "fundamental": 0.32},
+    "弱熊": {"trend": 0.033, "momentum": 0.042, "reversal": 0.605, "fundamental": 0.32},
+    "强熊": {"trend": 0.000, "momentum": 0.000, "reversal": 0.680, "fundamental": 0.32},
     # 数据不足时只用于"展示评分"，不应据此开新仓（exposure=0）
-    "未知": {"trend": 0.14, "momentum": 0.08, "reversal": 0.46, "fundamental": 0.32},
+    "未知": {"trend": 0.078, "momentum": 0.089, "reversal": 0.513, "fundamental": 0.32},
 }
 
 

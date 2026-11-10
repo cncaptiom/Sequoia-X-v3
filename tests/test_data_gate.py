@@ -107,3 +107,13 @@ def test_regime_unknown_when_benchmark_too_short():
     result = RegimeDetector(_ShortDataEngine()).detect("000905")
     assert result.regime is MarketRegime.UNKNOWN
     assert not result.is_valid
+
+
+def test_regime_bias_tables_are_valid_distributions():
+    """每档权重必须非负且合计为 1 —— 校准改表时最容易在这里出错。"""
+    from sequoia_x.regime import REGIME_BIAS
+
+    for label, bias in REGIME_BIAS.items():
+        assert set(bias) == {"trend", "momentum", "reversal", "fundamental"}, label
+        assert all(v >= 0 for v in bias.values()), label
+        assert abs(sum(bias.values()) - 1.0) < 1e-6, label
