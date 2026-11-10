@@ -10,8 +10,13 @@ import '../services/storage_service.dart';
 /// PC端 COS 数据 Provider
 /// 定时从腾讯云拉取 PC端 Sequoia-X 的计算结果
 class PcDataProvider extends ChangeNotifier {
-  final CosApiService _cos = CosApiService();
-  final StorageService _storage = StorageService();
+  final CosApiService _cos;
+  final StorageService _storage;
+
+  /// 依赖可注入，便于单测覆盖批次校验与刷新竞态（生产使用默认构造）。
+  PcDataProvider({CosApiService? cos, StorageService? storage})
+      : _cos = cos ?? CosApiService(),
+        _storage = storage ?? StorageService();
 
   /// 可选：关联WatchlistProvider，自动同步PC推荐股票
   WatchlistProvider? _watchlistProvider;
@@ -338,7 +343,7 @@ class PcDataProvider extends ChangeNotifier {
       if (seq != _refreshSeq) return;
 
       // ── 批次一致性校验 ──
-      final mismatch = _checkBatch(
+      final mismatch = checkBatch(
         expectedRunId: expectedRunId,
         listed: listed,
         summary: newSummary,
@@ -415,7 +420,8 @@ class PcDataProvider extends ChangeNotifier {
   ///
   /// 旧实现在没有 manifest 时只看各请求是否成功，各文件独立更新，
   /// 新评级配旧信号的情况不会被发现（2026-11-09 审查 #8）。
-  String? _checkBatch({
+  @visibleForTesting
+  static String? checkBatch({
     required String expectedRunId,
     required Set<String> listed,
     required PcPortfolioSummary? summary,
@@ -438,8 +444,11 @@ class PcDataProvider extends ChangeNotifier {
       if (summary != null) summary.runId,
       if (ratings != null) ratings.runId,
       if (signals != null) signals.runId,
-    }..removeWhere((id) => id.isEmpty);
+    };
 
+    // 有 manifest 时，每个拿到的文件都必须带同一个 run_id。
+    // 空串（旧版文件没有 run_id）同样算不一致——不能把升级前的旧文件
+    // 和新批次拼在一起用。
     if (runIds.any((id) => id != expectedRunId)) {
       return 'PC端数据批次不一致，已保留上一批数据';
     }
