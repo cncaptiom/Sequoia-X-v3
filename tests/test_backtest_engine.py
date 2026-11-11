@@ -81,7 +81,7 @@ def test_next_open_does_not_change_signal_day_equity():
     engine, _ = _make_engine(frames, cfg)
 
     result = engine.run(_DummyStrategy, ["sh.600000"], DATES[0], DATES[-1],
-                        strategy_kwargs={"signals": {DATES[0]: ["sh.600000"]}})
+                        strategy_kwargs={"settings": None, "signals": {DATES[0]: ["sh.600000"]}})
 
     equity = dict(zip(result.equity_curve["date"], result.equity_curve["equity"]))
     assert equity[DATES[0]] == pytest.approx(cfg.initial_capital)
@@ -98,7 +98,7 @@ def test_trade_enters_on_next_open_price():
     engine, _ = _make_engine(frames, cfg)
 
     result = engine.run(_DummyStrategy, ["sh.600000"], DATES[0], DATES[-1],
-                        strategy_kwargs={"signals": {DATES[0]: ["sh.600000"]}})
+                        strategy_kwargs={"settings": None, "signals": {DATES[0]: ["sh.600000"]}})
 
     assert result.trades
     assert result.trades[0].entry_date == DATES[1]
@@ -117,7 +117,7 @@ def test_strategy_exception_still_manages_positions_and_equity():
 
     result = engine.run(
         _DummyStrategy, ["sh.600000"], DATES[0], DATES[-1],
-        strategy_kwargs={"signals": {DATES[0]: ["sh.600000"]},
+        strategy_kwargs={"settings": None, "signals": {DATES[0]: ["sh.600000"]},
                          "fail_on": DATES[2]},
     )
 
@@ -144,7 +144,7 @@ def test_budget_below_one_lot_is_skipped():
     engine, _ = _make_engine(frames, cfg)
 
     result = engine.run(_DummyStrategy, ["sh.600000"], DATES[0], DATES[-1],
-                        strategy_kwargs={"signals": {DATES[0]: ["sh.600000"],
+                        strategy_kwargs={"settings": None, "signals": {DATES[0]: ["sh.600000"],
                                                      DATES[1]: ["sh.600000"]}})
 
     assert result.trades == []
@@ -162,7 +162,46 @@ def test_ledger_conservation_after_round_trip():
     engine, _ = _make_engine(frames, cfg)
 
     result = engine.run(_DummyStrategy, ["sh.600000"], DATES[0], DATES[-1],
-                        strategy_kwargs={"signals": {DATES[0]: ["sh.600000"]}})
+                        strategy_kwargs={"settings": None, "signals": {DATES[0]: ["sh.600000"]}})
 
     final_equity = float(result.equity_curve["equity"].iloc[-1])
     assert final_equity == pytest.approx(cfg.initial_capital + result.total_pnl, rel=1e-6)
+
+
+def test_same_close_skips_limit_up_close():
+    """same_close 模式同样不能买在涨停收盘价（2026-11-11 复审残留 #2）。"""
+    frames = {"sh.600000": _bars(
+        opens=[10.0, 10.5, 11.0, 11.0, 11.0],
+        closes=[10.0, 11.0, 11.0, 11.0, 11.0],
+        highs=[10.2, 11.0, 11.2, 11.2, 11.2],
+        lows=[9.9, 10.9, 10.9, 10.9, 10.9],
+    )}
+    cfg = BacktestConfig(min_bars=0, max_positions=1, fill_mode="same_close",
+                         slippage=0.0, commission=0.0, take_profit_pct=0.01)
+    engine, _ = _make_engine(frames, cfg)
+
+    result = engine.run(_DummyStrategy, ["sh.600000"], DATES[0], DATES[-1],
+                        strategy_kwargs={"settings": None,
+                                         "signals": {DATES[1]: ["sh.600000"]}})
+
+    assert result.trades == []
+
+
+def test_same_close_still_buys_below_limit_up():
+    """对照：未涨停时 same_close 仍应正常成交，避免上一条因其他原因空过。"""
+    frames = {"sh.600000": _bars(
+        opens=[10.0, 10.5, 11.0, 11.2, 11.2],
+        closes=[10.0, 10.8, 11.0, 11.2, 11.2],
+        highs=[10.2, 10.9, 11.2, 11.3, 11.3],
+        lows=[9.9, 10.7, 10.9, 11.0, 11.0],
+    )}
+    cfg = BacktestConfig(min_bars=0, max_positions=1, fill_mode="same_close",
+                         slippage=0.0, commission=0.0, take_profit_pct=0.01)
+    engine, _ = _make_engine(frames, cfg)
+
+    result = engine.run(_DummyStrategy, ["sh.600000"], DATES[0], DATES[-1],
+                        strategy_kwargs={"settings": None,
+                                         "signals": {DATES[1]: ["sh.600000"]}})
+
+    assert len(result.trades) == 1
+    assert result.trades[0].entry_date == DATES[1]

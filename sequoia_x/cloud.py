@@ -302,29 +302,3 @@ class CosUploader:
         }
 
         return self._put_json("signals/today.json", data)
-
-
-# ── 兼容旧的函数式 API（保持 main.py 调用不变） ──
-
-def _make_uploader(bucket, region, secret_id, secret_key):
-    return CosUploader(bucket, region, secret_id, secret_key)
-
-
-def upload_recommendations(bucket, region, secret_id, secret_key, path, signals, market_regime="", exposure=0.0):
-    return _make_uploader(bucket, region, secret_id, secret_key).upload_recommendations(path, signals, market_regime, exposure)
-
-
-def upload_rating_config(bucket, region, secret_id, secret_key, config):
-    return _make_uploader(bucket, region, secret_id, secret_key).upload_rating_config(config)
-
-
-def upload_market_regime(bucket, region, secret_id, secret_key, regime_data):
-    return _make_uploader(bucket, region, secret_id, secret_key).upload_market_regime(regime_data)
-
-
-def upload_full_ratings(bucket, region, secret_id, secret_key, ratings, strategy_config, regime=None):
-    return _make_uploader(bucket, region, secret_id, secret_key).upload_full_ratings(ratings, strategy_config, regime)
-
-
-def upload_portfolio_summary(bucket, region, secret_id, secret_key, top_picks, rating_summary, market_regime="", suggested_exposure=0.0, strategy_bias=None):
-    return _make_uploader(bucket, region, secret_id, secret_key).upload_portfolio_summary(top_picks, rating_summary, market_regime, suggested_exposure, strategy_bias)

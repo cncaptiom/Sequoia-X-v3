@@ -117,3 +117,11 @@ def test_regime_bias_tables_are_valid_distributions():
         assert set(bias) == {"trend", "momentum", "reversal", "fundamental"}, label
         assert all(v >= 0 for v in bias.values()), label
         assert abs(sum(bias.values()) - 1.0) < 1e-6, label
+
+
+def test_priority_watchlist_not_configured_returns_none(tmp_path, monkeypatch):
+    """未配置优先清单是「跳过」，不能被当成上传失败去阻断 manifest。"""
+    from main import _upload_priority_watchlist
+
+    monkeypatch.chdir(tmp_path)   # 目录里没有 data/priority_watchlist.json
+    assert _upload_priority_watchlist(object(), object()) is None

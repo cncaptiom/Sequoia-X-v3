@@ -359,6 +359,10 @@ class BacktestEngine:
                 bar = self._bar_on(all_data[sym], current_date)
                 if bar is None:
                     continue
+                # A股执行约束：收盘价一字涨停买不进（与 next_open 分支同口径）
+                limit_up, _ = self._limit_prices(all_data[sym], current_date, sym)
+                if limit_up is not None and float(bar["close"]) >= limit_up - 0.001:
+                    continue
                 equity_now = capital + self._market_value(
                     positions, all_data, current_date, inclusive=False)
                 new_capital = self._book_entry(

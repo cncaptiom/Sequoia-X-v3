@@ -14,7 +14,7 @@
   · 指标：Top15 逐日等权前向收益、相对当日全A等权基准的超额。
 
 用法:
-    python run_trend_calib.py [--limit N] [--factors 0,0.25,0.5,0.75,1,1.5,2]
+    python run_trend_calib.py [--limit N] [--factors 0,0.5,1,1.5,2,3]
 """
 
 from __future__ import annotations
@@ -38,6 +38,58 @@ def _base_weights(label: str) -> dict[str, float]:
     """生产 REGIME_BIAS 去掉 fundamental 后的三类权重（与回放口径一致）。"""
     bias = REGIME_BIAS[label]
     return {c: float(bias[c]) for c in CATS_NONFUND}
+
+
+def _scoring_fingerprint() -> str:
+    """评分口径指纹；评分代码变了就必须让缓存失效（不只是股票池一致）。"""
+    import hashlib
+    import inspect
+
+    from sequoia_x.eval import replay_scores
+
+    h = hashlib.sha1()
+    h.update(inspect.getsource(replay_scores).encode("utf-8"))
+    h.update(inspect.getsource(ev.build_score_matrix).encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
+def paired_test(results: list[dict], baseline: float,
+                start: str, end: str) -> dict:
+    """相对基准因子的逐日配对检验（Newey-West，滞后 = 前瞻期 − 1）。
+
+    同一交易日、同一批可选股票，只换权重 → 用配对差而不是两组绝对值比，
+    否则日间方差会把差异淹没。这是提交里引用的 t 值的可复现代码。
+    """
+    from run_factor_validation import _ic_stats
+
+    base = next((r for r in results if r["factor"] == baseline), None)
+    if base is None:
+        return {}
+    base_by_date = {x["date"]: x for x in base["daily"]}
+
+    out: dict = {}
+    for r in results:
+        if r["factor"] == baseline:
+            continue
+        row = {}
+        for n in ev.FWD:
+            diffs = []
+            for x in r["daily"]:
+                if not (start <= x["date"] <= end):
+                    continue
+                y = base_by_date.get(x["date"])
+                if y is None or n not in x or n not in y:
+                    continue
+                diffs.append(x[n] - y[n])
+            stats = _ic_stats(np.array(diffs), overlap=int(n))
+            row[str(n)] = {
+                "delta_pp": (round(stats["mean_ic"] * 100, 3)
+                             if stats["mean_ic"] is not None else None),
+                "t_nw": stats["t_nw"],
+                "n_days": stats["n_days"],
+            }
+        out[str(r["factor"])] = row
+    return out
 
 
 def weights_for_factor(label: str, f: float) -> dict[str, float]:
@@ -172,13 +224,19 @@ def main() -> None:
 
     t0 = time.time()
     import os
+    fingerprint = _scoring_fingerprint()
     if os.path.exists(args.cache):
         with open(args.cache, "rb") as fh:
-            blocks, cached_syms = pickle.load(fh)
-        print(f"复用评分缓存 {args.cache}（{len(blocks)} 天，股票池 {len(cached_syms)}）", flush=True)
-        if cached_syms != syms:
-            print("  警告：缓存股票池与本次不一致，重新构建", flush=True)
+            cached = pickle.load(fh)
+        # 旧格式是 (blocks, syms)；新格式多一个评分口径指纹
+        blocks, cached_syms = cached[0], cached[1]
+        cached_fp = cached[2] if len(cached) > 2 else ""
+        if cached_syms != syms or cached_fp != fingerprint:
+            print("  警告：缓存股票池或评分口径与本次不一致，重新构建", flush=True)
             blocks = None
+        else:
+            print(f"复用评分缓存 {args.cache}（{len(blocks)} 天，股票池 {len(cached_syms)}）",
+                  flush=True)
     else:
         blocks = None
 
@@ -187,7 +245,7 @@ def main() -> None:
         blocks = prepare_blocks(big, args.min_stocks)
         del big
         with open(args.cache, "wb") as fh:
-            pickle.dump((blocks, syms), fh)
+            pickle.dump((blocks, syms, fingerprint), fh)
         print(f"截面就绪: {len(blocks)} 天，耗时 {time.time()-t0:.0f}s（已缓存）", flush=True)
 
     results = []
@@ -220,10 +278,24 @@ def main() -> None:
     for label in ("强牛", "弱牛", "震荡", "弱熊", "强熊"):
         print(f"  {label}: 当前 {_base_weights(label)}")
 
+    # 相对 f=1 的配对检验（结论只看这个，不看绝对超额的高低）
+    paired = {}
+    if 1.0 in factors:
+        paired = paired_test(results, baseline=1.0, start=start, end=end)
+        print("\n相对 f=1 的逐日配对差异（Newey-West t；|t|<2 视为不可区分）:")
+        for fac in sorted(paired, key=float):
+            row = paired[fac]
+            txt = "  ".join(
+                f"{n}日 Δ={row[n]['delta_pp']:+.3f}pp t={row[n]['t_nw']:+.2f}"
+                for n in ("5", "10", "20") if row[n]["delta_pp"] is not None)
+            print(f"  f={fac}: {txt}")
+
     payload = {"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                "trend_mode": args.trend_mode,
+               "scoring_fingerprint": fingerprint,
                "split": {"train_start": start, "train_end": "2025-12-31",
                          "valid_start": SPLIT_DATE, "valid_end": end},
+               "paired_vs_f1": paired,
                "results": results}
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=1)

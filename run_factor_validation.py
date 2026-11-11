@@ -352,6 +352,9 @@ def main():
 
     output = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "method_note": ("ic_summary[*]['ir'] 是朴素 mean/std，仅作展示；"
+                        "重叠前瞻窗口下显著性必须看 t_nw 与 n_eff，"
+                        "不要用 ir 判断显著"),
         "config": {"start": START, "bench": bench_sym, "lookback": LOOKBACK, "fwd": FWD},
         "data": {"symbols": df["symbol"].nunique(), "rows": len(df), "dates": int(df["date"].nunique())},
         "factor_ic": ic_summary,

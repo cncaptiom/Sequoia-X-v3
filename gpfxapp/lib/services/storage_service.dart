@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/stock_info.dart';
@@ -199,15 +200,19 @@ class StorageService {
     try {
       final v = await _secure.read(key: key);
       if (v != null && v.isNotEmpty) return v;
-    } catch (_) {
-      // 安全存储不可用（如部分桌面/测试环境）时退回旧位置，避免配置凭空消失
+    } catch (e) {
+      // 安全存储不可用时退回旧位置，避免配置凭空消失。
+      // 但必须留痕：长期走这条路径意味着明文仍留在 Hive 里。
+      debugPrint('安全存储读取失败，回退 Hive 旧值（$key）: $e');
     }
     final legacy = Hive.box(_settingsBox).get(key, defaultValue: '') as String;
     if (legacy.isNotEmpty) {
       try {
         await _secure.write(key: key, value: legacy);
         await Hive.box(_settingsBox).delete(key);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('安全存储迁移失败，$key 仍留在 Hive: $e');
+      }
     }
     return legacy;
   }

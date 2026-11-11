@@ -139,16 +139,20 @@ def _evaluate_data_gate(engine, logger, sync_count: int | None = None,
 
 
 def _upload_priority_watchlist(uploader, engine, regime_result=None):
-    """上传优先监控列表（Serenity 产业链瓶颈标的）到 COS。"""
+    """上传优先监控列表（Serenity 产业链瓶颈标的）到 COS。
+
+    返回 None 表示「未配置清单，跳过」——不能当成上传失败去阻断 manifest；
+    返回 False 才是真的上传失败。
+    """
     import json, os
     watchlist_path = "data/priority_watchlist.json"
     if not os.path.exists(watchlist_path):
-        return False
+        return None
     try:
         with open(watchlist_path, encoding="utf-8") as f:
             watchlist = json.load(f)
     except Exception:
-        return False
+        return None
 
     from sequoia_x.utils.name_resolver import get_name_resolver
     resolver = get_name_resolver()
@@ -341,7 +345,9 @@ def _upload_to_cos(settings, logger, engine, rating_results=None, signals=None,
             ok = False
 
         # 上传优先监控列表（Serenity 产业链瓶颈标的）
-        _upload_priority_watchlist(uploader, engine, regime_result)
+        # 只有真的上传失败才影响 manifest；未配置清单返回 None，视为跳过
+        if _upload_priority_watchlist(uploader, engine, regime_result) is False:
+            ok = False
 
     # 上传完整信号数据（手机端操作建议主数据源）
     if signals:
