@@ -68,6 +68,15 @@ void main() {
     expect(provider.isLoading, isFalse);
   });
 
+  test('manifest 请求异常时不得降级为无校验模式（R2-02）', () async {
+    final provider = PcDataProvider(cos: _ManifestFailCos());
+    await provider.refresh();
+
+    expect(provider.summary, isNull);          // 没有把新数据落地
+    expect(provider.error, contains('批次清单'));  // 明确报错
+    expect(provider.isLoading, isFalse);
+  });
+
   test('只有一次刷新时结果正常落地', () async {
     final only = Completer<PcPortfolioSummary?>();
     final provider = PcDataProvider(cos: _FakeCos([only.future]));
@@ -82,3 +91,15 @@ void main() {
     expect(provider.isLoading, isFalse);
   });
 }
+
+class _ManifestFailCos extends CosApiService {
+  @override
+  Future<Map<String, dynamic>?> fetchManifest() async {
+    throw Exception('network down');
+  }
+
+  @override
+  Future<PcPortfolioSummary?> fetchPortfolioSummary() async =>
+      _summary('run-new', '2026-11-06');
+}
+

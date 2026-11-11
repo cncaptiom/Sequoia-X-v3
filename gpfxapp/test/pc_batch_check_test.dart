@@ -75,6 +75,16 @@ void main() {
     expect(err, contains('批次不一致'));
   });
 
+
+  test('manifest 未列出的文件被识别为 absent（旧状态必须清空）', () {
+    final absent = PcDataProvider.absentFiles({'summary/today.json'});
+    expect(absent, {'ratings/today.json', 'signals/today.json'});
+  });
+
+  test('manifest 列出全部文件时没有 absent', () {
+    expect(PcDataProvider.absentFiles(listed), isEmpty);
+  });
+
   test('旧版文件缺 run_id 也算不一致（不能和旧文件拼批）', () {
     final err = PcDataProvider.checkBatch(
       expectedRunId: 'run-1',

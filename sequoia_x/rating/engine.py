@@ -916,6 +916,7 @@ class RatingEngine:
         top_n: int = 20,
         min_bars: int = 60,
         ic_tracker=None,
+        as_of: str | None = None,
     ) -> list[AnalysisResult]:
         all_results: list[AnalysisResult] = []
 
@@ -957,7 +958,10 @@ class RatingEngine:
                 if r.raw_strategy_scores:
                     scores_by_symbol[r.symbol] = dict(r.raw_strategy_scores)
             if scores_by_symbol:
-                date_str = date.today().strftime("%Y-%m-%d")
+                # 快照日期必须是**行情日期**，不能用程序运行日：
+                # 周末/节假日运行时 date.today() 不在交易日序列里，快照会被
+                # 当作非交易日直接清掉（复审 R2-04）。
+                date_str = as_of or date.today().strftime("%Y-%m-%d")
                 ic_tracker.record_scores(date_str, scores_by_symbol)
 
         # 扫描结束，登出 baostock

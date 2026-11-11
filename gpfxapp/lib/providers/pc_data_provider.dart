@@ -301,11 +301,22 @@ class PcDataProvider extends ChangeNotifier {
 
     try {
       // ── 先取批次清单：所有文件必须是同一次 PC 运行的产物 ──
+      // 只有明确的 404（旧版 PC 没有 manifest）才允许走兼容模式；
+      // 网络/鉴权/解析异常必须当作刷新失败，否则会退回无批次校验的路径，
+      // 把混批风险重新引进来（复审 R2-02）。
       Map<String, dynamic>? manifest;
+      String? manifestError;
       try {
         manifest = await _cos.fetchManifest();
-      } catch (_) {
-        manifest = null;
+      } catch (e) {
+        manifestError = 'PC端批次清单加载失败: $e';
+      }
+      if (seq != _refreshSeq) return;
+      if (manifestError != null) {
+        _error = manifestError;
+        _isLoading = false;
+        notifyListeners();
+        return;
       }
       final expectedRunId = (manifest?['run_id'] as String?) ?? '';
       final listed = (manifest?['files'] as List?)?.map((e) => '$e').toSet() ??
@@ -359,6 +370,25 @@ class PcDataProvider extends ChangeNotifier {
       }
 
       // ── 落地 ──
+      // 本批次明确没有发布的文件（manifest 存在但未列出）不能保留上一批的旧对象，
+      // 否则会形成「新信号 + 旧评级」的混用（复审 R2-03）。
+      final absent = expectedRunId.isEmpty ? const <String>{} : absentFiles(listed);
+      if (absent.contains('summary/today.json')) {
+        _summary = null;
+        await _storage.clearPcCached('summary');
+      }
+      if (absent.contains('ratings/today.json')) {
+        _fullRatings = null;
+        _ratingsMap = {};
+        ratingsError = '本批次未包含评级数据，旧评级已清除';
+        await _storage.clearPcCached('ratings');
+      }
+      if (absent.contains('signals/today.json')) {
+        _signals = null;
+        _signalsMap = {};
+        await _storage.clearPcCached('signals');
+      }
+
       if (newSummary != null) _summary = newSummary;
       if (newRatings != null) {
         _fullRatings = newRatings;
@@ -414,6 +444,20 @@ class PcDataProvider extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  /// 本批次 manifest 明确没有包含的关键文件。
+  ///
+  /// 与「列出了但没取到」不同：这些文件是这次 PC 运行根本没产出的，
+  /// 对应旧状态必须清空，不能继续沿用上一批（复审 R2-03）。
+  @visibleForTesting
+  static Set<String> absentFiles(Set<String> listed) {
+    const critical = [
+      'summary/today.json',
+      'ratings/today.json',
+      'signals/today.json',
+    ];
+    return critical.where((p) => !listed.contains(p)).toSet();
   }
 
   /// 校验这一批数据是否完整且同源。返回错误文案，通过则返回 null。

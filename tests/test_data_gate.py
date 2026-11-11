@@ -3,6 +3,7 @@
 对应 2026-11-09 代码审查 #7、#11。
 """
 import sqlite3
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -48,11 +49,12 @@ def test_gate_rejects_empty_db(tmp_path):
 
 def test_gate_rejects_low_coverage(tmp_path):
     db = tmp_path / "t.db"
-    date = "2026-11-06"
-    rows = [("000905", date)]
+    d = (date.today() - timedelta(days=1)).isoformat()
+    rows = [("000905", d)]
     # 90 只股票里只有 1 只在最新行情日有数据
-    rows += [(f"60{i:04d}", "2026-11-05") for i in range(89)]
-    rows += [("600001", date)]
+    rows += [(f"60{i:04d}", (date.today() - timedelta(days=2)).isoformat())
+             for i in range(89)]
+    rows += [("600001", d)]
     _make_db(db, rows)
 
     ok, _, reasons = _evaluate_data_gate(_Engine(db), _Log())
@@ -62,22 +64,45 @@ def test_gate_rejects_low_coverage(tmp_path):
 
 def test_gate_rejects_missing_index(tmp_path):
     db = tmp_path / "t.db"
-    date = "2026-11-06"
-    _make_db(db, [("600001", date), ("600002", date)])
+    d = (date.today() - timedelta(days=1)).isoformat()
+    _make_db(db, [("600001", d), ("600002", d)])
 
     ok, _, reasons = _evaluate_data_gate(_Engine(db), _Log())
     assert not ok
     assert any("000905" in r for r in reasons)
 
 
+def test_gate_rejects_stale_data_even_when_sync_count_unknown(tmp_path):
+    """非交易日 sync_count=None 也必须检查行情年龄（复审 R2-01）。"""
+    db = tmp_path / "t.db"
+    stale = (date.today() - timedelta(days=20)).isoformat()
+    _make_db(db, [("000905", stale), ("600001", stale), ("600002", stale)])
+
+    ok, data_as_of, reasons = _evaluate_data_gate(_Engine(db), _Log(), None)
+    assert not ok
+    assert data_as_of == stale
+    assert any("过期" in r for r in reasons)
+
+
+def test_gate_rejects_stale_data_when_sync_count_positive(tmp_path):
+    """同步写了若干条但最新行情日仍很旧，也要拦（复审 R2-01）。"""
+    db = tmp_path / "t.db"
+    stale = (date.today() - timedelta(days=20)).isoformat()
+    _make_db(db, [("000905", stale), ("600001", stale)])
+
+    ok, _, reasons = _evaluate_data_gate(_Engine(db), _Log(), 3)
+    assert not ok
+    assert any("过期" in r for r in reasons)
+
+
 def test_gate_passes_and_reports_data_as_of(tmp_path):
     db = tmp_path / "t.db"
-    date = "2026-11-06"
-    _make_db(db, [("000905", date), ("600001", date), ("600002", date)])
+    d = (date.today() - timedelta(days=1)).isoformat()
+    _make_db(db, [("000905", d), ("600001", d), ("600002", d)])
 
     ok, data_as_of, reasons = _evaluate_data_gate(_Engine(db), _Log())
     assert ok
-    assert data_as_of == date
+    assert data_as_of == d
     assert reasons == []
 
 

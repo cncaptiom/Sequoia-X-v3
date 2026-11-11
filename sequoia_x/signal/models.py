@@ -36,6 +36,9 @@ class TradeSignal:
     # 仓位管理
     suggested_position_pct: float = 0.0   # 建议仓位占比（占资金比例，如 0.08 = 8%）
     atr_value: Optional[float] = None     # 当前 ATR 值（用于评估波动风险）
+    # 仓位计算失败（ATR/止损距离/资金预算异常）→ 不可执行，仓位强制为 0。
+    # 不能给一个"默认 5%"继续往下走（复审 R2-05）。
+    position_error: bool = False
 
     # 评级（选股依据；--daily 路径不产生评级，留空）
     rating: str = ""                      # strong_buy/buy/watch/attention/avoid

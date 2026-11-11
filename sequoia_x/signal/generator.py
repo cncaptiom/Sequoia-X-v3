@@ -67,18 +67,29 @@ class SignalGenerator:
         current_price = float(last["close"])
         last_date = str(last["date"])
 
-        # 数据新鲜度：超过 7 个自然日不推荐；给了全市场行情日时，
-        # 落后于该日期的个股（停牌/缺数据）同样不推荐
-        if self.data_as_of and last_date < self.data_as_of:
-            logger.log(5, f"[{symbol}] 行情落后于全市场最新日 "
-                          f"({last_date} < {self.data_as_of})，跳过")
-            return None
+        # 数据新鲜度：日期必须先严格解析再比较。
+        # 此前直接做字符串比较、且解析失败被 `except: pass` 吞掉，
+        # 脏日期可以绕过过期检查继续出信号（复审 R2-06）。
         try:
-            if (date.today() - date.fromisoformat(last_date)).days > 7:
-                logger.log(5, f"[{symbol}] 数据过期 ({last_date})，跳过")
+            last_dt = date.fromisoformat(last_date)
+        except (TypeError, ValueError):
+            logger.warning(f"[{symbol}] 行情日期无法解析 ({last_date!r})，跳过")
+            return None
+
+        if self.data_as_of:
+            try:
+                as_of_dt = date.fromisoformat(self.data_as_of)
+            except (TypeError, ValueError):
+                logger.warning(f"[{symbol}] data_as_of 无法解析 ({self.data_as_of!r})，跳过")
                 return None
-        except Exception:
-            pass
+            if last_dt < as_of_dt:
+                logger.log(5, f"[{symbol}] 行情落后于全市场最新日 "
+                              f"({last_date} < {self.data_as_of})，跳过")
+                return None
+
+        if (date.today() - last_dt).days > 7:
+            logger.log(5, f"[{symbol}] 数据过期 ({last_date})，跳过")
+            return None
 
         # ---- 计算技术指标用于生成信号 ----
         closes = df["close"]
@@ -143,6 +154,7 @@ class SignalGenerator:
 
         # ---- 计算建议仓位（终值由 main 按组合总仓位重新分配） ----
         position_pct = 0.0
+        position_error = False
         atr_val_rounded = round(atr_val, 2)
         if zone.status != "none":
             try:
@@ -150,8 +162,11 @@ class SignalGenerator:
                 position = sizer.calculate(symbol, df, entry_price=entry_ref or current_price)
                 position_pct = position.position_pct
                 atr_val_rounded = position.atr
-            except Exception:
-                position_pct = 0.05
+            except Exception as exc:
+                # fail closed：风险计算失败不能给默认仓位继续建议买入
+                position_pct = 0.0
+                position_error = True
+                logger.warning(f"[{symbol}] 仓位计算失败，本次信号标记为不可执行: {exc}")
 
         # ---- 计算形态分（内部字段仍为 confidence） ----
         confidence, confidence_details = self._calc_confidence(
@@ -205,6 +220,7 @@ class SignalGenerator:
             target_is_fallback=target_is_fallback,
             max_hold_days=20,
             suggested_position_pct=round(position_pct, 4),
+            position_error=position_error,
             atr_value=round(atr_val_rounded, 2),
             confidence=round(confidence, 3),
             score_details=confidence_details,

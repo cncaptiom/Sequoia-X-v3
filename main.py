@@ -76,7 +76,9 @@ def _check_data_freshness(engine, logger, phase: str = "") -> dict:
 
 # ── 数据质量闸门（fail closed）──
 GATE_MIN_COVERAGE = 0.50      # 最新行情日的个股覆盖率下限
-GATE_MAX_STALE_DAYS = 5       # 最新行情日距今的最大自然日数
+# 行情年龄上限（自然日）。取 10 是为了覆盖 A 股最长假期（春节/国庆 7~8 天）后
+# 仍有余量；判定用 >=，即恰好 10 天也算过期。
+GATE_MAX_STALE_DAYS = 10
 GATE_INDEX_SYMBOL = "000905"  # 关键指数
 
 
@@ -89,7 +91,7 @@ def _evaluate_data_gate(engine, logger, sync_count: int | None = None,
     手机端看到的日期却是程序运行日（2026-11-09 审查 #7）。
 
     判据：库里有数据 / 最新行情日覆盖率达标 / 关键指数当日有数据 /
-    交易日同步写 0 条时最新行情日不能超出容忍期。
+    最新行情日年龄不超过上限（**与 sync_count 无关**，非交易日同样检查）。
     """
     import sqlite3
 
@@ -121,13 +123,20 @@ def _evaluate_data_gate(engine, logger, sync_count: int | None = None,
             f"（<{GATE_MIN_COVERAGE:.0%}）")
     if not has_index:
         reasons.append(f"关键指数 {GATE_INDEX_SYMBOL} 在 {latest} 无数据")
-    if sync_count == 0:
+    # 行情年龄必须**无条件**检查：非交易日 sync_count=None 时同样适用。
+    # 此前只在 sync_count==0 时判年龄，非交易日/调度任务运行、或同步结果未知
+    # 时会把多日前的行情当成可用（复审 R2-01）。
+    try:
         age = (date.today() - date.fromisoformat(str(latest))).days
-        if age > GATE_MAX_STALE_DAYS:
-            reasons.append(f"同步写入 0 条且最新行情日 {latest} 已过期 {age} 天")
-        else:
-            logger.warning(
-                f"同步写入 0 条，但最新行情 {latest} 仍在 {GATE_MAX_STALE_DAYS} 天容忍期内")
+    except (TypeError, ValueError):
+        age = None
+        reasons.append(f"最新行情日 {latest} 无法解析")
+    if age is not None and age >= GATE_MAX_STALE_DAYS:
+        reasons.append(
+            f"最新行情日 {latest} 已过期 {age} 天（上限 {GATE_MAX_STALE_DAYS} 天）")
+    elif sync_count == 0:
+        logger.warning(
+            f"同步写入 0 条，但最新行情 {latest} 仍在 {GATE_MAX_STALE_DAYS} 天容忍期内")
 
     if reasons:
         for r in reasons:
@@ -790,6 +799,7 @@ def _run_rating(settings, logger, engine, notifier) -> None:
         top_n=99999,
         min_bars=60,
         ic_tracker=ic_tracker,
+        as_of=data_as_of,
     )
     logger.info(f"评级完成，上榜 {len(all_results)} 只")
 
@@ -1044,10 +1054,12 @@ def _apply_portfolio_positions(signals, total_exposure: float, cap: float = 0.15
     不再让 PositionSizer 的 15% 饱和值直接出现在卡片上。
     """
     actionable = [s for s in signals
-                  if s.zone_status in ("inside", "outside") and s.entry_ref > 0]
+                  if s.zone_status in ("inside", "outside") and s.entry_ref > 0
+                  and not s.position_error]
     per = min(total_exposure / len(actionable), cap) if actionable else 0.0
     for s in signals:
-        ok = s.zone_status in ("inside", "outside") and s.entry_ref > 0
+        ok = (s.zone_status in ("inside", "outside") and s.entry_ref > 0
+              and not s.position_error)
         s.suggested_position_pct = round(per, 4) if ok else 0.0
 
 

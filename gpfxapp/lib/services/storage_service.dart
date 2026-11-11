@@ -296,6 +296,21 @@ class StorageService {
     await Hive.box(_settingsBox).put('pcCachedSignals', signals);
   }
 
+  /// 清空某一块 PC 数据的本地缓存。
+  /// 当新批次 manifest 明确没有包含该文件时，旧缓存必须一起清掉，
+  /// 否则下次启动会把上一批的旧对象恢复回来，重新形成新旧混用。
+  Future<void> clearPcCached(String kind) async {
+    const keys = {
+      'summary': 'pcCachedSummary',
+      'ratings': 'pcCachedRatings',
+      'signals': 'pcCachedSignals',
+    };
+    final key = keys[kind];
+    if (key != null) {
+      await Hive.box(_settingsBox).delete(key);
+    }
+  }
+
   Future<String?> getPcCacheTimestamp() async {
     return Hive.box(_settingsBox).get('pcCacheTimestamp') as String?;
   }
